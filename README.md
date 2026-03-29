@@ -176,5 +176,5 @@ Probes include: missing credentials, malformed packets, oversized messages, forg
 ## Production notes
 
 - Set `logging.level` to `info` or `warn` in production. `debug` logs every packet event and is verbose under load.
-- The included frontend (`frontend/index.html`) uses a `LEASE_MS` constant to cap the effective token lifetime displayed in the UI and trigger proactive refresh. Set it to match your token TTL in production (default in the file is `2 * 60 * 1000` for testing).
+- The included example (`examples/energy-monitor.html`) uses a `LEASE_MS` constant to cap the effective token lifetime displayed in the UI and trigger proactive refresh. Set it to match your token TTL in production (default in the file is `2 * 60 * 1000` for testing).
 - When running behind Cloudflare, TLS termination happens at the edge. The proxy receives plain HTTP WebSocket upgrades; do not configure TLS on the proxy listener itself. Ensure the Cloudflare WebSocket proxying option is enabled for the hostname.
