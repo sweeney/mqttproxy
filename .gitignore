@@ -1,0 +1,4 @@
+.envrc
+scripts/e2e.env
+config.yaml
+/mqttproxy

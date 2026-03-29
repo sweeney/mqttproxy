@@ -1,0 +1,25 @@
+listen:
+  addr: "0.0.0.0:8883"
+  path: "/mqtt"
+
+broker:
+  addr: "127.0.0.1:1883"   # raw MQTT TCP port (not the WebSocket port)
+  dial_timeout: "5s"
+
+auth:
+  well_known_url: "https://id.swee.net/.well-known/oauth-authorization-server"
+  issuer: "https://id.swee.net"
+  audience: "mqttproxy"        # must match aud claim in issued tokens; omit to skip check
+  jwks_cache_ttl: "1h"
+
+acl:
+  roles:
+    admin:
+      publish:   ["#"]
+      subscribe: ["#"]
+    user:
+      publish:   []
+      subscribe: ["#"]
+
+logging:
+  level: "info"   # debug | info | warn | error

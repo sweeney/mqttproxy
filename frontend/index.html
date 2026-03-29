@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Energy Monitor</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0f1117;
+    color: #e2e8f0;
+    margin: 0;
+    padding: 1.5rem;
+    min-height: 100vh;
+  }
+
+  h1 {
+    margin: 0 0 0.25rem;
+    font-size: 1.4rem;
+    color: #02aaa2;
+    letter-spacing: -0.02em;
+  }
+
+  .subtitle {
+    font-size: 0.8rem;
+    color: #64748b;
+    margin: 0 0 1.5rem;
+  }
+
+  /* ── Layout ── */
+  .layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 1rem;
+    max-width: 1100px;
+  }
+
+  @media (max-width: 720px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: #1e2330;
+    border: 1px solid #2d3448;
+    border-radius: 10px;
+    padding: 1rem;
+  }
+
+  .card-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #64748b;
+    margin: 0 0 0.75rem;
+  }
+
+  /* ── Pill status ── */
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+  }
+
+  .status::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .status.ok       { color: #10b981; background: #10b98120; }
+  .status.warn     { color: #f59e0b; background: #f59e0b20; }
+  .status.err      { color: #ef4444; background: #ef444420; }
+  .status.idle     { color: #64748b; background: #64748b20; }
+
+  /* ── Buttons ── */
+  button {
+    background: #02aaa2;
+    color: #fff;
+    border: none;
+    padding: 0.45rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    width: 100%;
+    transition: background 0.15s;
+  }
+
+  button:hover  { background: #029990; }
+  button:active { background: #018880; }
+
+  button.secondary {
+    background: #2d3448;
+    color: #94a3b8;
+  }
+  button.secondary:hover { background: #374060; color: #e2e8f0; }
+
+  button.danger { background: #ef4444; }
+  button.danger:hover { background: #dc2626; }
+
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-row { display: flex; flex-direction: column; gap: 0.5rem; }
+
+  /* ── User info ── */
+  .user-info { margin-bottom: 0.75rem; }
+
+  .user-name {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #e2e8f0;
+  }
+
+  .user-meta {
+    font-size: 0.75rem;
+    color: #64748b;
+    margin-top: 0.15rem;
+  }
+
+  .role-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.1rem 0.45rem;
+    border-radius: 4px;
+    background: #02aaa220;
+    color: #02aaa2;
+    margin-left: 0.3rem;
+  }
+
+  .role-badge.admin { background: #f59e0b20; color: #f59e0b; }
+
+  /* ── Config inputs ── */
+  label {
+    display: block;
+    font-size: 0.72rem;
+    color: #64748b;
+    margin-bottom: 0.25rem;
+    margin-top: 0.6rem;
+  }
+  label:first-of-type { margin-top: 0; }
+
+  input[type="text"] {
+    width: 100%;
+    background: #0f1117;
+    border: 1px solid #2d3448;
+    border-radius: 6px;
+    color: #e2e8f0;
+    font-size: 0.8rem;
+    padding: 0.4rem 0.6rem;
+    font-family: ui-monospace, monospace;
+  }
+  input[type="text"]:focus {
+    outline: none;
+    border-color: #02aaa2;
+  }
+
+  /* ── Message feed ── */
+  .feed-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+  }
+
+  .feed-header .card-title { margin: 0; }
+
+  .msg-count {
+    font-size: 0.72rem;
+    color: #64748b;
+  }
+
+  #feed {
+    height: calc(100vh - 220px);
+    min-height: 300px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column-reverse; /* newest at top */
+  }
+
+  .msg {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.25rem 0.75rem;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid #2d3448;
+    animation: fadeIn 0.15s ease;
+  }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; } }
+
+  .msg-topic {
+    font-size: 0.72rem;
+    color: #02aaa2;
+    font-family: ui-monospace, monospace;
+    font-weight: 600;
+    grid-column: 1;
+    grid-row: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .msg-payload {
+    font-size: 0.85rem;
+    color: #e2e8f0;
+    word-break: break-all;
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .msg-payload.json {
+    font-family: ui-monospace, monospace;
+    font-size: 0.78rem;
+    color: #94a3b8;
+    white-space: pre-wrap;
+  }
+
+  .msg-time {
+    font-size: 0.68rem;
+    color: #475569;
+    white-space: nowrap;
+    grid-column: 2;
+    grid-row: 1 / 3;
+    align-self: center;
+    text-align: right;
+  }
+
+  .empty-state {
+    color: #475569;
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 3rem 0;
+  }
+
+  /* ── Token expiry bar ── */
+  .expiry-bar {
+    height: 3px;
+    background: #2d3448;
+    border-radius: 999px;
+    overflow: hidden;
+    margin: 0.75rem 0 0;
+  }
+
+  .expiry-fill {
+    height: 100%;
+    background: #02aaa2;
+    border-radius: 999px;
+    transition: width 1s linear, background 1s;
+  }
+
+  .expiry-label {
+    font-size: 0.68rem;
+    color: #475569;
+    margin-top: 0.3rem;
+    text-align: right;
+  }
+
+  /* ── Divider ── */
+  .divider {
+    border: none;
+    border-top: 1px solid #2d3448;
+    margin: 0.75rem 0;
+  }
+
+  /* ── Log panel ── */
+  #log-panel {
+    max-height: 160px;
+    overflow-y: auto;
+    font-family: ui-monospace, monospace;
+    font-size: 0.7rem;
+    line-height: 1.5;
+  }
+
+  .log-entry { display: flex; gap: 0.4rem; padding: 0.1rem 0; }
+  .log-ts  { color: #475569; white-space: nowrap; flex-shrink: 0; }
+  .log-lvl { font-weight: 700; flex-shrink: 0; width: 3.2rem; }
+  .log-lvl.info  { color: #02aaa2; }
+  .log-lvl.warn  { color: #f59e0b; }
+  .log-lvl.error { color: #ef4444; }
+  .log-msg { color: #94a3b8; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<h1>⚡ Energy Monitor</h1>
+<p class="subtitle">Live <code>energy/#</code> feed via MQTT-WS proxy · id.swee.net auth</p>
+
+<div class="layout">
+
+  <!-- ── Left panel ── -->
+  <div>
+
+    <!-- Auth card -->
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-title">Identity</div>
+
+      <div id="view-signed-out">
+        <p style="font-size:0.82rem;color:#94a3b8;margin:0 0 0.75rem">
+          Sign in with your id.swee.net account to connect to the broker.
+        </p>
+        <div class="btn-row">
+          <button onclick="startLogin()">Sign in</button>
+        </div>
+      </div>
+
+      <div id="view-signed-in" style="display:none">
+        <div class="user-info">
+          <div class="user-name">
+            <span id="ui-username"></span>
+            <span id="ui-role-badge" class="role-badge"></span>
+          </div>
+          <div class="user-meta" id="ui-user-meta"></div>
+        </div>
+        <div class="expiry-bar"><div class="expiry-fill" id="expiry-fill"></div></div>
+        <div class="expiry-label" id="expiry-label"></div>
+        <hr class="divider">
+        <div class="btn-row">
+          <button onclick="mqttConnect()" id="btn-connect">Connect to broker</button>
+          <button class="secondary danger" onclick="signOut()">Sign out</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MQTT status card -->
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-title">Broker</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem">
+        <span id="mqtt-status" class="status idle">Disconnected</span>
+        <button onclick="mqttDisconnect()" id="btn-disconnect"
+          class="secondary" style="width:auto;padding:0.25rem 0.6rem;font-size:0.72rem"
+          disabled>Disconnect</button>
+      </div>
+      <label>Proxy WebSocket URL</label>
+      <input type="text" id="cfg-broker" value="ws://localhost:8883/mqtt">
+      <label>Subscribe topic</label>
+      <input type="text" id="cfg-topic" value="energy/#">
+    </div>
+
+    <!-- Log panel -->
+    <div class="card" style="margin-bottom:1rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">
+        <div class="card-title" style="margin:0">Log</div>
+        <button onclick="clearLog()" class="secondary"
+          style="width:auto;padding:0.15rem 0.5rem;font-size:0.68rem;display:inline">clear</button>
+      </div>
+      <div id="log-panel"></div>
+    </div>
+
+    <!-- Config card -->
+    <div class="card">
+      <div class="card-title">OAuth Config</div>
+      <label>Client ID</label>
+      <input type="text" id="cfg-client-id" value="energy-monitor">
+      <label>Auth server</label>
+      <input type="text" id="cfg-auth-url" value="https://id.swee.net">
+    </div>
+
+  </div>
+
+  <!-- ── Right panel: feed ── -->
+  <div class="card">
+    <div class="feed-header">
+      <div class="card-title">Messages</div>
+      <span class="msg-count"><span id="msg-count">0</span> received · <button onclick="clearFeed()"
+        class="secondary" style="width:auto;padding:0.15rem 0.5rem;font-size:0.68rem;display:inline">clear</button></span>
+    </div>
+    <div id="feed">
+      <div class="empty-state" id="empty-state">No messages yet.<br>Sign in and connect to start receiving.</div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Token lease config
+// Cap the effective session lifetime regardless of what the server issues.
+// Refresh fires 20 seconds before this expires.
+// Set to e.g. 15 * 60 * 1000 for production, 2 * 60 * 1000 for testing.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LEASE_MS       = 2 * 60 * 1000; // effective session lifetime
+const REFRESH_BEFORE = 20 * 1000;     // refresh this many ms before lease ends
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Logging
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_LOG = 100;
+
+function log(level, msg) {
+  const consoleFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+  consoleFn(`[${level.toUpperCase()}] ${msg}`);
+
+  const panel = document.getElementById('log-panel');
+  if (!panel) return;
+
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-ts">${timestamp()}</span>` +
+    `<span class="log-lvl ${level}">${level}</span>` +
+    `<span class="log-msg">${escHtml(msg)}</span>`;
+  panel.insertBefore(entry, panel.firstChild);
+
+  while (panel.children.length > MAX_LOG) panel.removeChild(panel.lastChild);
+}
+
+function clearLog() {
+  document.getElementById('log-panel').innerHTML = '';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+const cfg = {
+  get authURL()   { return document.getElementById('cfg-auth-url').value.replace(/\/$/, ''); },
+  get clientID()  { return document.getElementById('cfg-client-id').value.trim(); },
+  get brokerURL() { return document.getElementById('cfg-broker').value.trim(); },
+  get topic()     { return document.getElementById('cfg-topic').value.trim(); },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JWT helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseJWTPayload(token) {
+  try {
+    const part = token.split('.')[1];
+    return JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')));
+  } catch (_) {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PKCE helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function randomBase64url(len) {
+  const buf = new Uint8Array(len);
+  crypto.getRandomValues(buf);
+  return btoa(String.fromCharCode(...buf)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+
+async function pkceChallenge(verifier) {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return btoa(String.fromCharCode(...new Uint8Array(hash))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Token storage
+// ─────────────────────────────────────────────────────────────────────────────
+
+const store = {
+  save(r)  {
+    const leaseMs = Math.min(r.expires_in * 1000, LEASE_MS);
+    localStorage.setItem('em_access_token',  r.access_token);
+    localStorage.setItem('em_refresh_token', r.refresh_token);
+    localStorage.setItem('em_expires_at',    String(Date.now() + leaseMs));
+  },
+  clear() {
+    ['em_access_token','em_refresh_token','em_expires_at','em_pkce_verifier','em_oauth_state']
+      .forEach(k => localStorage.removeItem(k));
+  },
+  get accessToken()  { return localStorage.getItem('em_access_token'); },
+  get refreshToken() { return localStorage.getItem('em_refresh_token'); },
+  get expiresAt()    { return parseInt(localStorage.getItem('em_expires_at') || '0', 10); },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth flow
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function startLogin() {
+  log('info', 'Starting OAuth PKCE login flow');
+  store.clear();
+  const verifier  = randomBase64url(32);
+  const state     = randomBase64url(16);
+  const challenge = await pkceChallenge(verifier);
+
+  localStorage.setItem('em_pkce_verifier', verifier);
+  localStorage.setItem('em_oauth_state',   state);
+
+  // Persist config inputs so they survive the redirect.
+  localStorage.setItem('em_cfg_client_id', cfg.clientID);
+  localStorage.setItem('em_cfg_auth_url',  cfg.authURL);
+
+  const params = new URLSearchParams({
+    response_type:         'code',
+    client_id:             cfg.clientID,
+    redirect_uri:          redirectURI(),
+    code_challenge:        challenge,
+    code_challenge_method: 'S256',
+    state,
+  });
+
+  location.href = `${cfg.authURL}/oauth/authorize?${params}`;
+}
+
+function redirectURI() {
+  return location.origin + location.pathname;
+}
+
+async function handleCallback(code, returnedState) {
+  log('info', 'OAuth callback received — exchanging code for token');
+  const expectedState = localStorage.getItem('em_oauth_state');
+  if (returnedState !== expectedState) {
+    log('error', 'OAuth state mismatch — possible CSRF');
+    alert('OAuth state mismatch — possible CSRF. Please try again.');
+    store.clear();
+    return;
+  }
+
+  // Restore config that was saved before redirect.
+  const savedClientID = localStorage.getItem('em_cfg_client_id');
+  const savedAuthURL  = localStorage.getItem('em_cfg_auth_url');
+  if (savedClientID) document.getElementById('cfg-client-id').value = savedClientID;
+  if (savedAuthURL)  document.getElementById('cfg-auth-url').value  = savedAuthURL;
+
+  const verifier = localStorage.getItem('em_pkce_verifier');
+
+  let resp;
+  try {
+    resp = await fetch(`${cfg.authURL}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type:    'authorization_code',
+        client_id:     cfg.clientID,
+        code,
+        redirect_uri:  redirectURI(),
+        code_verifier: verifier,
+      }),
+    });
+  } catch (e) {
+    log('error', `Token exchange fetch failed: ${e.message}`);
+    alert(`Token exchange failed: ${e.message}`);
+    store.clear();
+    return;
+  }
+
+  const body = await resp.json();
+  if (!resp.ok) {
+    const msg = body.error_description || body.error || resp.status;
+    log('error', `Token exchange rejected: ${msg}`);
+    alert(`Token exchange failed: ${msg}`);
+    store.clear();
+    return;
+  }
+
+  const effectiveSecs = Math.round(Math.min(body.expires_in * 1000, LEASE_MS) / 1000);
+  log('info', `Token received — server: ${body.expires_in}s, effective lease: ${effectiveSecs}s`);
+  store.save(body);
+  localStorage.removeItem('em_pkce_verifier');
+  localStorage.removeItem('em_oauth_state');
+
+  history.replaceState(null, '', location.pathname);
+  await loadUser();
+}
+
+async function refreshToken() {
+  const rt = store.refreshToken;
+  if (!rt) { log('warn', 'Token refresh skipped — no refresh token'); return false; }
+
+  const url = `${cfg.authURL}/oauth/token`;
+  log('info', `POST ${url} grant_type=refresh_token client_id=${cfg.clientID}`);
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: rt, client_id: cfg.clientID }),
+    });
+
+    log('info', `Token refresh response: HTTP ${resp.status}`);
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      log('warn', `Token refresh rejected: ${body.error} — ${body.error_description || '(no description)'}`);
+      return false;
+    }
+    const body = await resp.json();
+    const claims = parseJWTPayload(body.access_token);
+    log('info', `New token claims — sub: ${claims?.sub}, aud: ${JSON.stringify(claims?.aud)}, rol: ${claims?.rol}`);
+    store.save(body);
+    const effectiveSecs = Math.round(Math.min(body.expires_in * 1000, LEASE_MS) / 1000);
+    log('info', `Token refreshed — server: ${body.expires_in}s, effective lease: ${effectiveSecs}s`);
+    return true;
+  } catch (e) {
+    log('error', `Token refresh fetch failed: ${e.message}`);
+    return false;
+  }
+}
+
+async function loadUser() {
+  log('info', 'Loading user profile');
+  let resp = await fetch(`${cfg.authURL}/api/v1/auth/me`, {
+    headers: { 'Authorization': `Bearer ${store.accessToken}` },
+  });
+
+  if (resp.status === 401) {
+    log('warn', '/auth/me returned 401 — attempting token refresh');
+    const ok = await refreshToken();
+    if (!ok) { log('error', 'Token refresh failed — signing out'); signOut(); return; }
+    resp = await fetch(`${cfg.authURL}/api/v1/auth/me`, {
+      headers: { 'Authorization': `Bearer ${store.accessToken}` },
+    });
+  }
+
+  if (!resp.ok) {
+    log('error', `/auth/me failed: ${resp.status}`);
+    signOut();
+    return;
+  }
+
+  const user = await resp.json();
+  log('info', `Signed in as ${user.username} (${user.role})`);
+  showSignedIn(user);
+}
+
+function signOut() {
+  log('info', 'Signing out');
+  mqttDisconnect();
+  store.clear();
+  clearExpiryTimer();
+  showSignedOut();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Token expiry UI
+// ─────────────────────────────────────────────────────────────────────────────
+
+let expiryInterval = null;
+let tokenRefreshing = false; // guard: only one refresh in flight at a time
+
+function startExpiryTimer() {
+  clearExpiryTimer();
+  expiryInterval = setInterval(tickExpiry, 1000);
+  tickExpiry();
+}
+
+function clearExpiryTimer() {
+  clearInterval(expiryInterval);
+  expiryInterval = null;
+  tokenRefreshing = false;
+}
+
+function tickExpiry() {
+  const remaining = store.expiresAt - Date.now();
+  if (remaining <= 0) {
+    log('warn', 'Access token expired');
+    document.getElementById('expiry-fill').style.width = '0%';
+    document.getElementById('expiry-label').textContent = 'Token expired';
+    handleTokenExpired();
+    return;
+  }
+
+  const pct      = Math.max(0, Math.min(100, (remaining / LEASE_MS) * 100));
+  const mins     = Math.floor(remaining / 60000);
+  const secs     = Math.floor((remaining % 60000) / 1000);
+
+  const fill = document.getElementById('expiry-fill');
+  fill.style.width = `${pct}%`;
+  fill.style.background = pct > 30 ? '#02aaa2' : pct > 10 ? '#f59e0b' : '#ef4444';
+  document.getElementById('expiry-label').textContent =
+    `Token expires in ${mins}m ${secs}s`;
+
+  // Refresh REFRESH_BEFORE ms before the lease ends — once per cycle.
+  if (remaining < REFRESH_BEFORE && !tokenRefreshing) {
+    tokenRefreshing = true;
+    refreshToken().then(ok => {
+      tokenRefreshing = false;
+      if (ok) {
+        // Reconnect MQTT with fresh token if connected.
+        if (mqttClient && mqttClient.connected) {
+          mqttDisconnect();
+          setTimeout(mqttConnect, 200);
+        }
+      } else {
+        handleTokenExpired();
+      }
+    });
+  }
+}
+
+async function handleTokenExpired() {
+  clearExpiryTimer();
+  mqttDisconnect();
+  const ok = await refreshToken();
+  if (ok) {
+    await loadUser();
+    startExpiryTimer();
+  } else {
+    signOut();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI state
+// ─────────────────────────────────────────────────────────────────────────────
+
+function showSignedOut() {
+  document.getElementById('view-signed-out').style.display = '';
+  document.getElementById('view-signed-in').style.display  = 'none';
+}
+
+function showSignedIn(user) {
+  document.getElementById('view-signed-out').style.display = 'none';
+  document.getElementById('view-signed-in').style.display  = '';
+
+  document.getElementById('ui-username').textContent = user.username;
+
+  const badge = document.getElementById('ui-role-badge');
+  badge.textContent = user.role;
+  badge.className   = `role-badge ${user.role === 'admin' ? 'admin' : ''}`;
+
+  document.getElementById('ui-user-meta').textContent =
+    `${user.is_active ? 'Active' : 'Inactive'} · ${user.id.slice(0, 8)}…`;
+
+  startExpiryTimer();
+}
+
+function setMQTTStatus(state, text) {
+  const el = document.getElementById('mqtt-status');
+  el.className = `status ${state}`;
+  el.textContent = text;
+  document.getElementById('btn-disconnect').disabled = (state !== 'ok' && state !== 'warn');
+  document.getElementById('btn-connect').disabled    = (state === 'ok');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MQTT
+// ─────────────────────────────────────────────────────────────────────────────
+
+let mqttClient   = null;
+let messageCount = 0;
+
+function mqttConnect() {
+  const token = store.accessToken;
+  if (!token) { alert('Not signed in.'); return; }
+
+  if (mqttClient) mqttDisconnect();
+
+  setMQTTStatus('warn', 'Connecting…');
+
+  const clientID = `em-${randomBase64url(6)}`;
+  const brokerURL = cfg.brokerURL;
+  const topic = cfg.topic;
+
+  log('info', `Connecting to ${brokerURL} as ${clientID}`);
+
+  mqttClient = mqtt.connect(brokerURL, {
+    clientId:        clientID,
+    username:        document.getElementById('ui-username').textContent || 'user',
+    password:        token,
+    protocolVersion: 4, // MQTT 3.1.1
+    reconnectPeriod: 0, // disable auto-reconnect — we handle it ourselves
+    connectTimeout:  8000,
+  });
+
+  mqttClient.on('connect', (connack) => {
+    log('info', `Connected (session present: ${connack.sessionPresent})`);
+    setMQTTStatus('ok', 'Connected');
+    log('info', `Subscribing to ${topic}`);
+    mqttClient.subscribe(topic, { qos: 0 }, (err, granted) => {
+      if (err) {
+        log('error', `Subscribe failed: ${err.message}`);
+        setMQTTStatus('err', `Subscribe failed: ${err.message}`);
+      } else {
+        log('info', `Subscribed — ${granted.map(g => `${g.topic} QoS${g.qos}`).join(', ')}`);
+      }
+    });
+  });
+
+  mqttClient.on('message', (topic, payload) => {
+    const str = payload.toString();
+    log('info', `MSG ${topic}: ${str.length > 80 ? str.slice(0, 80) + '…' : str}`);
+    addMessage(topic, str);
+  });
+
+  mqttClient.on('error', (err) => {
+    log('error', `MQTT error: ${err.message}`);
+    setMQTTStatus('err', `Error: ${err.message}`);
+  });
+
+  mqttClient.on('close', () => {
+    log('info', 'MQTT connection closed');
+    if (document.getElementById('mqtt-status').textContent !== 'Disconnected') {
+      setMQTTStatus('idle', 'Disconnected');
+    }
+  });
+
+  mqttClient.on('disconnect', (packet) => {
+    const reason = packet?.reasonCode !== undefined ? ` (reason: 0x${packet.reasonCode.toString(16)})` : '';
+    log('warn', `Broker sent DISCONNECT${reason}`);
+    setMQTTStatus('err', `Disconnected by broker${reason}`);
+  });
+
+  mqttClient.on('offline', () => {
+    log('warn', 'MQTT client went offline');
+    setMQTTStatus('warn', 'Offline');
+  });
+
+  mqttClient.on('reconnect', () => {
+    log('info', 'MQTT reconnecting…');
+  });
+}
+
+function mqttDisconnect() {
+  if (mqttClient) {
+    setMQTTStatus('idle', 'Disconnected');
+    mqttClient.end(true);
+    mqttClient = null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Message feed
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_MESSAGES = 200;
+
+function addMessage(topic, raw) {
+  const emptyState = document.getElementById('empty-state');
+  if (emptyState) emptyState.style.display = 'none';
+
+  messageCount++;
+  document.getElementById('msg-count').textContent = messageCount;
+
+  const feed = document.getElementById('feed');
+
+  // Trim to MAX_MESSAGES, but never remove the empty-state sentinel.
+  while (feed.children.length > MAX_MESSAGES) {
+    const last = feed.lastChild;
+    if (!last || last.id === 'empty-state') break;
+    feed.removeChild(last);
+  }
+
+  // Try to pretty-print JSON payloads.
+  let displayPayload = raw;
+  let payloadClass   = '';
+  try {
+    const parsed = JSON.parse(raw);
+    displayPayload = JSON.stringify(parsed, null, 2);
+    payloadClass   = 'json';
+  } catch (_) {}
+
+  const el  = document.createElement('div');
+  el.className = 'msg';
+  el.innerHTML = `
+    <div class="msg-topic">${escHtml(topic)}</div>
+    <div class="msg-payload ${payloadClass}">${escHtml(displayPayload)}</div>
+    <div class="msg-time">${timestamp()}</div>
+  `;
+
+  feed.insertBefore(el, feed.firstChild);
+}
+
+function clearFeed() {
+  const feed = document.getElementById('feed');
+  while (feed.firstChild && feed.firstChild.id !== 'empty-state') {
+    feed.removeChild(feed.firstChild);
+  }
+  document.getElementById('empty-state').style.display = '';
+  messageCount = 0;
+  document.getElementById('msg-count').textContent = '0';
+}
+
+function timestamp() {
+  const d = new Date();
+  return d.toLocaleTimeString('en-GB', { hour12: false }) +
+    '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Boot
+// ─────────────────────────────────────────────────────────────────────────────
+
+(async function init() {
+  const params = new URLSearchParams(location.search);
+  const code   = params.get('code');
+  const state  = params.get('state');
+
+  if (code && state) {
+    log('info', 'OAuth callback — code present');
+    await handleCallback(code, state);
+  } else if (store.accessToken) {
+    log('info', 'Existing token found — loading user');
+    await loadUser();
+  } else {
+    log('info', 'No token — showing sign-in');
+    showSignedOut();
+  }
+})();
+</script>
+</body>
+</html>
