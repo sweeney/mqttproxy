@@ -1,0 +1,35 @@
+[Unit]
+Description=MQTT-over-WebSocket authentication proxy
+After=network.target
+Documentation=https://github.com/sweeney/mqttproxy
+
+[Service]
+Type=simple
+User=mqttproxy
+Group=mqttproxy
+
+ExecStart=/opt/mqttproxy/bin/mqttproxy -config /etc/mqttproxy/config.yaml
+
+Restart=always
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
+LockPersonality=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mqttproxy
+
+[Install]
+WantedBy=multi-user.target
