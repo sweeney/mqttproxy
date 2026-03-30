@@ -474,7 +474,7 @@ const store = {
     localStorage.setItem('em_expires_at',    String(Date.now() + leaseMs));
   },
   clear() {
-    ['em_access_token','em_refresh_token','em_expires_at','em_pkce_verifier','em_oauth_state']
+    ['em_access_token','em_refresh_token','em_expires_at','em_pkce_verifier','em_oauth_state','em_mqtt_client_id']
       .forEach(k => localStorage.removeItem(k));
   },
   get accessToken()  { return localStorage.getItem('em_access_token'); },
@@ -748,6 +748,15 @@ function setMQTTStatus(state, text) {
 let mqttClient   = null;
 let messageCount = 0;
 
+function getOrCreateClientID() {
+  let id = localStorage.getItem('em_mqtt_client_id');
+  if (!id) {
+    id = `em-${randomBase64url(6)}`;
+    localStorage.setItem('em_mqtt_client_id', id);
+  }
+  return id;
+}
+
 function mqttConnect() {
   const token = store.accessToken;
   if (!token) { alert('Not signed in.'); return; }
@@ -756,7 +765,7 @@ function mqttConnect() {
 
   setMQTTStatus('warn', 'Connecting…');
 
-  const clientID = `em-${randomBase64url(6)}`;
+  const clientID = getOrCreateClientID();
   const brokerURL = cfg.brokerURL;
   const topic = cfg.topic;
 
