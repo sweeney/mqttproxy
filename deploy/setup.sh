@@ -22,13 +22,15 @@ mkdir -p /opt/mqttproxy/bin
 chown "${SUDO_USER:-root}:${SUDO_USER:-root}" /opt/mqttproxy/bin
 
 mkdir -p /etc/mqttproxy
-chown root:mqttproxy /etc/mqttproxy
+# Deploy user owns the dir/config so deploy.sh can scp without sudo.
+# mqttproxy service user gets group read access.
+chown "${SUDO_USER:-root}:mqttproxy" /etc/mqttproxy
 chmod 750 /etc/mqttproxy
 
 echo "=== Installing config ==="
 if [ ! -f /etc/mqttproxy/config.yaml ]; then
     cp config.example.yaml /etc/mqttproxy/config.yaml
-    chown root:mqttproxy /etc/mqttproxy/config.yaml
+    chown "${SUDO_USER:-root}:mqttproxy" /etc/mqttproxy/config.yaml
     chmod 640 /etc/mqttproxy/config.yaml
     echo "  Installed /etc/mqttproxy/config.yaml from template"
     echo "  *** Edit this file with your settings before starting the service ***"

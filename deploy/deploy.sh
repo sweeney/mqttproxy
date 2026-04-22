@@ -16,6 +16,7 @@ REMOTE="${1:?Usage: $0 user@host}"
 BINARY="mqttproxy"
 BUILD_DIR="bin"
 DEPLOY_DIR="/opt/mqttproxy/bin"
+REMOTE_CONFIG="/etc/mqttproxy/config.yaml"
 HEALTH_URL="https://mqtt.swee.net/health"
 KEEP_VERSIONS=3
 
@@ -30,6 +31,14 @@ echo "  Built: $BUILD_DIR/$BINARY"
 echo "=== Uploading to $REMOTE ==="
 scp "$BUILD_DIR/$BINARY" "$REMOTE:$DEPLOY_DIR/$REMOTE_BIN"
 ssh "$REMOTE" "chmod 755 $DEPLOY_DIR/$REMOTE_BIN"
+
+echo "=== Uploading config ==="
+if [ -f config.yaml ]; then
+    scp config.yaml "$REMOTE:$REMOTE_CONFIG"
+    echo "  Uploaded config.yaml → $REMOTE_CONFIG"
+else
+    echo "  WARNING: config.yaml not found locally — remote config unchanged"
+fi
 
 echo "=== Activating $REMOTE_BIN ==="
 ssh "$REMOTE" "ln -sfn $REMOTE_BIN $DEPLOY_DIR/$BINARY"
