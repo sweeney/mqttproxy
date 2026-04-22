@@ -21,6 +21,9 @@ import (
 	"github.com/sweeney/mqttproxy/internal/proxy"
 )
 
+// version is set at build time via -ldflags "-X main.version=<git-sha>".
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -85,17 +88,19 @@ func run() error {
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]any{
-				"status":      "error",
-				"broker":      brokerAddr,
-				"detail":      err.Error(),
-				"elapsed_ms":  elapsed.Milliseconds(),
-				"checked_at":  time.Now().UTC().Format(time.RFC3339),
+				"status":     "error",
+				"version":    version,
+				"broker":     brokerAddr,
+				"detail":     err.Error(),
+				"elapsed_ms": elapsed.Milliseconds(),
+				"checked_at": time.Now().UTC().Format(time.RFC3339),
 			})
 			return
 		}
 		conn.Close()
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":     "ok",
+			"version":    version,
 			"broker":     brokerAddr,
 			"elapsed_ms": elapsed.Milliseconds(),
 			"checked_at": time.Now().UTC().Format(time.RFC3339),
