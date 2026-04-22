@@ -37,7 +37,7 @@ const (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin:  func(r *http.Request) bool { return true },
 	Subprotocols: []string{"mqtt", "mqttv3.1"},
 }
 
@@ -140,7 +140,7 @@ func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) 
 
 	// Forward the CONNECT to the broker with password stripped and username
 	// replaced by the identity from JWT claims.
-	rewrittenConnect := connectPkt.WithUsername(claims.Username)
+	rewrittenConnect := connectPkt.WithUsername(claims.Subject)
 	if err := writeBroker(brokerConn, rewrittenConnect); err != nil {
 		h.log.Error("write CONNECT to broker failed", zap.Error(err))
 		writeWS(wsConn, mqtt.WriteConnack(version, mqtt.ConnackServerUnavailable, false))
@@ -168,7 +168,7 @@ func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) 
 	}
 
 	h.log.Info("session established",
-		zap.String("username", claims.Username),
+		zap.String("username", claims.Subject),
 		zap.String("role", claims.Role),
 		zap.String("client_id", connectPkt.ClientID),
 	)
@@ -185,7 +185,7 @@ func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) 
 		defer close(done)
 		err := copyBrokerToClient(wsConn, brokerConn.(net.Conn))
 		h.log.Debug("broker→client copy ended",
-			zap.String("username", claims.Username),
+			zap.String("username", claims.Subject),
 			zap.Error(err),
 		)
 	}()
@@ -194,7 +194,7 @@ func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) 
 	h.proxyClientToBroker(ctx, wsConn, brokerConn.(net.Conn), claims, version, expiryTimer.C, done)
 
 	h.log.Info("session ended",
-		zap.String("username", claims.Username),
+		zap.String("username", claims.Subject),
 		zap.String("client_id", connectPkt.ClientID),
 	)
 }
@@ -228,7 +228,7 @@ func (h *Handler) proxyClientToBroker(
 		select {
 		case <-expiry:
 			h.log.Info("token expired, disconnecting",
-				zap.String("username", claims.Username),
+				zap.String("username", claims.Subject),
 			)
 			writeWS(wsConn, mqtt.WriteDisconnect(version, mqtt.DisconnectSessionTakenOver))
 			wsConn.Close()
@@ -237,7 +237,7 @@ func (h *Handler) proxyClientToBroker(
 
 		case <-done:
 			h.log.Debug("broker side closed, ending client→broker loop",
-				zap.String("username", claims.Username),
+				zap.String("username", claims.Subject),
 			)
 			return
 
@@ -296,7 +296,7 @@ func (h *Handler) checkACL(
 
 		if !h.acl.CanPublish(claims, topic) {
 			h.log.Info("publish denied by ACL",
-				zap.String("username", claims.Username),
+				zap.String("username", claims.Subject),
 				zap.String("topic", topic),
 			)
 			qos := (frame[0] >> 1) & 0x03
@@ -333,7 +333,7 @@ func (h *Handler) checkACL(
 				allDenied = false
 			} else {
 				h.log.Info("subscribe denied by ACL",
-					zap.String("username", claims.Username),
+					zap.String("username", claims.Subject),
 					zap.String("topic", topic),
 				)
 				codes = append(codes, mqtt.SubackNotAuthorized)

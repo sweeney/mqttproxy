@@ -89,9 +89,9 @@ func main() {
 			claims["iss"] = "https://evil.example.com"
 			return probeConnect(*addr, "user", forgeJWT(realKID, claims))
 		}},
-		{"token attacks", "real kid, act: false (inactive user)", func() string {
+		{"token attacks", "real kid, missing sub claim", func() string {
 			claims := validClaims()
-			claims["act"] = false
+			delete(claims, "sub")
 			return probeConnect(*addr, "user", forgeJWT(realKID, claims))
 		}},
 		{"token attacks", "real kid, missing rol claim", func() string {
@@ -214,9 +214,9 @@ func buildConnect(username, password string) []byte {
 
 	var payload []byte
 	payload = appendString(payload, "MQTT")
-	payload = append(payload, 0x04)         // MQTT 3.1.1
+	payload = append(payload, 0x04) // MQTT 3.1.1
 	payload = append(payload, flags)
-	payload = append(payload, 0x00, 0x1E)   // keepalive 30s
+	payload = append(payload, 0x00, 0x1E) // keepalive 30s
 	payload = appendString(payload, "probeauth-client")
 	if username != "" {
 		payload = appendString(payload, username)
@@ -271,9 +271,7 @@ func validClaims() map[string]any {
 		"aud": []string{"mqttproxy"},
 		"exp": time.Now().Add(15 * time.Minute).Unix(),
 		"iat": time.Now().Unix(),
-		"usr": "probe_user",
 		"rol": "user",
-		"act": true,
 	}
 }
 

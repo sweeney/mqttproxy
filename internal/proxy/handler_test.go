@@ -131,9 +131,8 @@ func TestHandler_ValidToken_ProxyEstablished(t *testing.T) {
 	h := proxy.NewHandler(proxy.Config{
 		Validator: &fakeValidator{
 			claims: &jwt.Claims{
-				Username:  "alice",
+				Subject:   "alice",
 				Role:      "admin",
-				IsActive:  true,
 				ExpiresAt: time.Now().Add(15 * time.Minute),
 			},
 		},
@@ -177,9 +176,9 @@ func TestHandler_InvalidToken_ConnackNotAuthorized(t *testing.T) {
 	assert.Equal(t, byte(0x05), msg[3]) // 0x05 = not authorized (3.1.1)
 }
 
-func TestHandler_InactiveUser_ConnackNotAuthorized(t *testing.T) {
+func TestHandler_WrongIssuer_ConnackNotAuthorized(t *testing.T) {
 	h := proxy.NewHandler(proxy.Config{
-		Validator: &fakeValidator{err: jwt.ErrUserInactive},
+		Validator: &fakeValidator{err: jwt.ErrInvalidIssuer},
 		ACL:       &fakeACL{},
 		Dialer:    &fakeBrokerDialer{err: errors.New("should not be called")},
 	})
@@ -202,9 +201,8 @@ func TestHandler_BrokerDialFail_ConnackServerUnavailable(t *testing.T) {
 	h := proxy.NewHandler(proxy.Config{
 		Validator: &fakeValidator{
 			claims: &jwt.Claims{
-				Username:  "alice",
+				Subject:   "alice",
 				Role:      "admin",
-				IsActive:  true,
 				ExpiresAt: time.Now().Add(15 * time.Minute),
 			},
 		},
@@ -280,9 +278,8 @@ func TestHandler_TokenExpiry_DisconnectsClient(t *testing.T) {
 	h := proxy.NewHandler(proxy.Config{
 		Validator: &fakeValidator{
 			claims: &jwt.Claims{
-				Username:  "alice",
+				Subject:   "alice",
 				Role:      "admin",
-				IsActive:  true,
 				ExpiresAt: time.Now().Add(100 * time.Millisecond), // expires very soon
 			},
 		},
@@ -315,9 +312,8 @@ func TestHandler_UserPublish_RejectedV311_Disconnects(t *testing.T) {
 	h := proxy.NewHandler(proxy.Config{
 		Validator: &fakeValidator{
 			claims: &jwt.Claims{
-				Username:  "bob",
+				Subject:   "bob",
 				Role:      "user",
-				IsActive:  true,
 				ExpiresAt: time.Now().Add(15 * time.Minute),
 			},
 		},
@@ -352,9 +348,8 @@ func TestHandler_AdminPublish_ForwardedToBroker(t *testing.T) {
 	h := proxy.NewHandler(proxy.Config{
 		Validator: &fakeValidator{
 			claims: &jwt.Claims{
-				Username:  "alice",
+				Subject:   "alice",
 				Role:      "admin",
-				IsActive:  true,
 				ExpiresAt: time.Now().Add(15 * time.Minute),
 			},
 		},
@@ -393,9 +388,8 @@ func TestHandler_IdleConnection_StaysOpen(t *testing.T) {
 	h := proxy.NewHandler(proxy.Config{
 		Validator: &fakeValidator{
 			claims: &jwt.Claims{
-				Username:  "alice",
+				Subject:   "alice",
 				Role:      "admin",
-				IsActive:  true,
 				ExpiresAt: time.Now().Add(15 * time.Minute),
 			},
 		},
@@ -434,9 +428,8 @@ func TestHandler_ConnectPasswordStrippedOnForward(t *testing.T) {
 	h := proxy.NewHandler(proxy.Config{
 		Validator: &fakeValidator{
 			claims: &jwt.Claims{
-				Username:  "alice",
+				Subject:   "alice",
 				Role:      "admin",
-				IsActive:  true,
 				ExpiresAt: time.Now().Add(15 * time.Minute),
 			},
 		},

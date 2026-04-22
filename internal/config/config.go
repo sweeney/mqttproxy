@@ -35,7 +35,8 @@ type AuthConfig struct {
 }
 
 type ACLConfig struct {
-	Roles map[string]RolePolicy `yaml:"roles"`
+	DefaultRole string                `yaml:"default_role"`
+	Roles       map[string]RolePolicy `yaml:"roles"`
 }
 
 type RolePolicy struct {
@@ -124,6 +125,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg.ACL = r.ACL
+	if cfg.ACL.DefaultRole == "" {
+		cfg.ACL.DefaultRole = "user"
+	}
 
 	// Logging defaults.
 	cfg.Logging.Level = r.Logging.Level

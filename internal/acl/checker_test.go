@@ -27,11 +27,11 @@ func defaultConfig() config.ACLConfig {
 }
 
 func adminClaims() *jwt.Claims {
-	return &jwt.Claims{Username: "admin-user", Role: "admin", IsActive: true}
+	return &jwt.Claims{Subject: "admin-user", Role: "admin"}
 }
 
 func userClaims() *jwt.Claims {
-	return &jwt.Claims{Username: "regular-user", Role: "user", IsActive: true}
+	return &jwt.Claims{Subject: "regular-user", Role: "user"}
 }
 
 // --- Publish ---
@@ -70,7 +70,7 @@ func TestUser_CanSubscribe_AnyTopic(t *testing.T) {
 
 func TestUnknownRole_DeniedByDefault(t *testing.T) {
 	c := acl.NewChecker(defaultConfig())
-	unknown := &jwt.Claims{Username: "x", Role: "superadmin", IsActive: true}
+	unknown := &jwt.Claims{Subject: "x", Role: "superadmin"}
 	assert.False(t, c.CanPublish(unknown, "any/topic"))
 	assert.False(t, c.CanSubscribe(unknown, "any/topic"))
 }

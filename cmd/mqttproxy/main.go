@@ -61,7 +61,7 @@ func run() error {
 	}
 
 	// jwks.Client satisfies jwt.KeySource directly.
-	validator, err := jwt.NewValidator(cfg.Auth.Issuer, cfg.Auth.Audience, jwksClient)
+	validator, err := jwt.NewValidator(cfg.Auth.Issuer, cfg.Auth.Audience, cfg.ACL.DefaultRole, jwksClient)
 	if err != nil {
 		return fmt.Errorf("init JWT validator: %w", err)
 	}

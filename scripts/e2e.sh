@@ -46,6 +46,7 @@ fi
 # --- Cleanup on exit ---
 PROXY_PID=""
 CONFIG_FILE=""
+PROXY_BIN=""
 
 cleanup() {
     if [[ -n "$PROXY_PID" ]] && kill -0 "$PROXY_PID" 2>/dev/null; then
@@ -56,13 +57,17 @@ cleanup() {
     if [[ -n "$CONFIG_FILE" && -f "$CONFIG_FILE" ]]; then
         rm -f "$CONFIG_FILE"
     fi
+    if [[ -n "$PROXY_BIN" && -f "$PROXY_BIN" ]]; then
+        rm -f "$PROXY_BIN"
+    fi
 }
 trap cleanup EXIT
 
 # --- Build ---
 echo "--- building proxy"
 cd "$ROOT"
-go build -o /tmp/mqttproxy ./cmd/mqttproxy
+PROXY_BIN="$(mktemp /tmp/mqttproxy-e2e-bin-XXXXXX)"
+go build -o "$PROXY_BIN" ./cmd/mqttproxy
 
 # --- Generate config ---
 CONFIG_FILE="$(mktemp /tmp/mqttproxy-e2e-XXXXXX.yaml)"
@@ -97,7 +102,7 @@ EOF
 
 # --- Start proxy ---
 echo "--- starting proxy on :${PROXY_PORT} (broker: ${BROKER_ADDR})"
-/tmp/mqttproxy -config "$CONFIG_FILE" &
+"$PROXY_BIN" -config "$CONFIG_FILE" &
 PROXY_PID=$!
 
 # --- Wait for proxy to be ready ---

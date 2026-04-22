@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/jwx/v2/jwa"
-	gojwt "github.com/lestrrat-go/jwx/v2/jwt"
 	"github.com/lestrrat-go/jwx/v2/jwk"
+	gojwt "github.com/lestrrat-go/jwx/v2/jwt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -51,11 +51,9 @@ func buildToken(t *testing.T, keys testKeys, opts ...func(gojwt.Token)) []byte {
 		Issuer(testIssuer).
 		Subject("user-uuid-123").
 		Audience([]string{testAudience}).
-		Expiration(time.Now().Add(15 * time.Minute)).
+		Expiration(time.Now().Add(15*time.Minute)).
 		IssuedAt(time.Now()).
-		Claim("usr", "alice").
 		Claim("rol", "user").
-		Claim("act", true).
 		Build()
 	require.NoError(t, err)
 
@@ -88,7 +86,7 @@ func (s *staticKeySource) GetKey(_ context.Context, kid string) (jwk.Key, error)
 
 func newValidator(t *testing.T, keys testKeys) *jwt.Validator {
 	t.Helper()
-	v, err := jwt.NewValidator(testIssuer, testAudience, &staticKeySource{set: keys.set})
+	v, err := jwt.NewValidator(testIssuer, testAudience, "user", &staticKeySource{set: keys.set})
 	require.NoError(t, err)
 	return v
 }
@@ -104,9 +102,7 @@ func TestValidate_ValidToken(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "user-uuid-123", claims.Subject)
-	assert.Equal(t, "alice", claims.Username)
 	assert.Equal(t, "user", claims.Role)
-	assert.True(t, claims.IsActive)
 	assert.WithinDuration(t, time.Now().Add(15*time.Minute), claims.ExpiresAt, 5*time.Second)
 }
 
@@ -176,7 +172,7 @@ func TestValidate_WrongAudience(t *testing.T) {
 func TestValidate_NoAudienceCheck_WhenAudienceEmpty(t *testing.T) {
 	keys := generateKeys(t)
 	// Validator with no audience configured should not check aud.
-	v, err := jwt.NewValidator(testIssuer, "", &staticKeySource{set: keys.set})
+	v, err := jwt.NewValidator(testIssuer, "", "user", &staticKeySource{set: keys.set})
 	require.NoError(t, err)
 
 	// Token with a different audience — should still pass.
@@ -187,23 +183,46 @@ func TestValidate_NoAudienceCheck_WhenAudienceEmpty(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestValidate_MissingRoleClaim(t *testing.T) {
+func TestValidate_MissingRoleClaim_UsesDefault(t *testing.T) {
 	keys := generateKeys(t)
-	v := newValidator(t, keys)
+	v := newValidator(t, keys) // default role = "user"
 
 	privKey, err := jwk.FromRaw(keys.priv)
 	require.NoError(t, err)
 	require.NoError(t, privKey.Set(jwk.KeyIDKey, keys.kid))
 	require.NoError(t, privKey.Set(jwk.AlgorithmKey, jwa.RS256))
 
-	// Build a token without the rol claim.
 	tok, err := gojwt.NewBuilder().
 		Issuer(testIssuer).
 		Subject("user-uuid-123").
 		Audience([]string{testAudience}).
 		Expiration(time.Now().Add(15 * time.Minute)).
-		Claim("usr", "alice").
-		Claim("act", true).
+		Build()
+	require.NoError(t, err)
+
+	signed, err := gojwt.Sign(tok, gojwt.WithKey(jwa.RS256, privKey))
+	require.NoError(t, err)
+
+	claims, err := v.Validate(t.Context(), string(signed))
+	require.NoError(t, err)
+	assert.Equal(t, "user", claims.Role)
+}
+
+func TestValidate_MissingRoleClaim_NoDefault(t *testing.T) {
+	keys := generateKeys(t)
+	v, err := jwt.NewValidator(testIssuer, testAudience, "", &staticKeySource{set: keys.set})
+	require.NoError(t, err)
+
+	privKey, err := jwk.FromRaw(keys.priv)
+	require.NoError(t, err)
+	require.NoError(t, privKey.Set(jwk.KeyIDKey, keys.kid))
+	require.NoError(t, privKey.Set(jwk.AlgorithmKey, jwa.RS256))
+
+	tok, err := gojwt.NewBuilder().
+		Issuer(testIssuer).
+		Subject("user-uuid-123").
+		Audience([]string{testAudience}).
+		Expiration(time.Now().Add(15 * time.Minute)).
 		Build()
 	require.NoError(t, err)
 
@@ -215,16 +234,16 @@ func TestValidate_MissingRoleClaim(t *testing.T) {
 	assert.ErrorIs(t, err, jwt.ErrMissingClaims)
 }
 
-func TestValidate_InactiveUser(t *testing.T) {
+func TestValidate_RolePresentOverridesDefault(t *testing.T) {
 	keys := generateKeys(t)
-	v := newValidator(t, keys)
+	v := newValidator(t, keys) // default role = "user"
 
 	token := buildToken(t, keys, func(tok gojwt.Token) {
-		tok.Set("act", false)
+		tok.Set("rol", "admin")
 	})
-	_, err := v.Validate(t.Context(), string(token))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, jwt.ErrUserInactive)
+	claims, err := v.Validate(t.Context(), string(token))
+	require.NoError(t, err)
+	assert.Equal(t, "admin", claims.Role)
 }
 
 func TestValidate_UnknownKeyID(t *testing.T) {
@@ -243,9 +262,7 @@ func TestValidate_UnknownKeyID(t *testing.T) {
 		Subject("s").
 		Audience([]string{testAudience}).
 		Expiration(time.Now().Add(time.Minute)).
-		Claim("usr", "u").
 		Claim("rol", "user").
-		Claim("act", true).
 		Build()
 	require.NoError(t, err)
 

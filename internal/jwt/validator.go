@@ -17,16 +17,13 @@ var (
 	ErrInvalidIssuer   = errors.New("token issuer does not match")
 	ErrInvalidAudience = errors.New("token audience does not match")
 	ErrMissingClaims   = errors.New("token is missing required claims")
-	ErrUserInactive    = errors.New("user account is inactive")
 	ErrKeyNotFound     = errors.New("key not found")
 )
 
 // Claims holds the fields extracted from a validated JWT.
 type Claims struct {
 	Subject   string
-	Username  string
 	Role      string
-	IsActive  bool
 	ExpiresAt time.Time
 }
 
@@ -38,18 +35,21 @@ type KeySource interface {
 
 // Validator parses and validates JWTs, extracting the claims the proxy needs.
 type Validator struct {
-	issuer    string
-	audience  string
-	keySource KeySource
+	issuer      string
+	audience    string
+	defaultRole string
+	keySource   KeySource
 }
 
-// NewValidator creates a Validator for the given issuer and audience.
-// audience may be empty, in which case the aud claim is not validated.
-func NewValidator(issuer, audience string, keySource KeySource) (*Validator, error) {
+// NewValidator creates a Validator for the given issuer, audience, and default
+// role. audience may be empty, in which case the aud claim is not validated.
+// defaultRole is used when the token carries no rol claim; an empty defaultRole
+// means rol is required.
+func NewValidator(issuer, audience, defaultRole string, keySource KeySource) (*Validator, error) {
 	if issuer == "" {
 		return nil, fmt.Errorf("issuer must not be empty")
 	}
-	return &Validator{issuer: issuer, audience: audience, keySource: keySource}, nil
+	return &Validator{issuer: issuer, audience: audience, defaultRole: defaultRole, keySource: keySource}, nil
 }
 
 // Validate parses the raw JWT string, verifies its signature and claims, and
@@ -87,7 +87,7 @@ func (v *Validator) Validate(ctx context.Context, rawToken string) (*Claims, err
 		return nil, mapParseError(err)
 	}
 
-	return extractClaims(tok)
+	return v.extractClaims(tok)
 }
 
 // mapParseError converts lestrrat-go/jwx errors into our sentinel types.
@@ -118,42 +118,25 @@ func contains(s string, subs ...string) bool {
 	return false
 }
 
-// Claim name constants matching the id.swee.net JWT payload.
-const (
-	claimUsername = "usr"
-	claimRole     = "rol"
-	claimActive   = "act"
-)
+const claimRole = "rol"
 
-func extractClaims(tok gojwt.Token) (*Claims, error) {
-	username, ok := stringClaim(tok, claimUsername)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrMissingClaims, claimUsername)
+func (v *Validator) extractClaims(tok gojwt.Token) (*Claims, error) {
+	subject := tok.Subject()
+	if subject == "" {
+		return nil, fmt.Errorf("%w: sub", ErrMissingClaims)
 	}
 
-	role, ok := stringClaim(tok, claimRole)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrMissingClaims, claimRole)
+	role := v.defaultRole
+	if r, ok := stringClaim(tok, claimRole); ok && r != "" {
+		role = r
 	}
-
-	isActiveRaw, ok := tok.Get(claimActive)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrMissingClaims, claimActive)
-	}
-	isActive, ok := isActiveRaw.(bool)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s must be a boolean", ErrMissingClaims, claimActive)
-	}
-
-	if !isActive {
-		return nil, ErrUserInactive
+	if role == "" {
+		return nil, fmt.Errorf("%w: rol (and no default_role configured)", ErrMissingClaims)
 	}
 
 	return &Claims{
-		Subject:   tok.Subject(),
-		Username:  username,
+		Subject:   subject,
 		Role:      role,
-		IsActive:  isActive,
 		ExpiresAt: tok.Expiration(),
 	}, nil
 }
