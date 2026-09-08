@@ -84,15 +84,16 @@ Clients authenticate by placing a signed JWT in the MQTT `password` field. The `
 
 1. Parse the JWT header to extract the `kid`.
 2. Fetch the matching public key from the JWKS at `{issuer_url}/.well-known/jwks.json`.
-3. Verify the signature using the algorithm declared on the key (RS256 or ES256).
-4. Validate standard claims: `iss`, `aud` (if configured), `exp`.
-5. Extract and validate custom claims:
+3. Verify the signature with ES256, pinned. The algorithm is *not* taken from the JWKS entry — trusting the key to name its own algorithm is a weakness, and identity signs with ES256 only.
+4. Validate standard claims: `iss`, `aud` (if configured), and `exp`. A token with no `exp` is rejected — the proxy holds the connection open until the token runs out, so an absent expiry cannot bound a session.
+5. Reject service tokens. A `client_credentials` token (`typ: at+jwt`) carries a client id in `sub`, not a user, so it must not pass as a user identity.
+6. Extract and validate custom claims:
 
 | Claim | Type   | Description                                    |
 |-------|--------|------------------------------------------------|
 | `usr` | string | Username forwarded to the broker               |
 | `rol` | string | Role name used for ACL lookup                  |
-| `act` | bool   | Must be `true`; `false` rejects the connection |
+| `act` | bool   | Must be `true`; `false` or absent rejects the connection |
 
 Any failure at any step produces a CONNACK with return code `Not Authorized` (0x05 for MQTT 3.1.1, 0x87 for MQTT 5.0) and the connection is closed.
 
@@ -151,15 +152,17 @@ The e2e suite covers: admin publish/subscribe, user subscribe-only, user publish
 go run ./cmd/probeauth [-addr ws://localhost:8883/mqtt] [-slow]
 ```
 
-Probes include: missing credentials, malformed packets, oversized messages, forged JWTs with bad signatures, expired tokens, wrong issuers, inactive users, and missing claims. The `-slow` flag adds a connect-then-silence test that waits for the 10-second `connectReadTimeout` to fire.
+Probes include: missing credentials, malformed packets, oversized messages, forged JWTs with bad signatures, expired tokens, wrong issuers, and missing claims. Note that every token probe carries a forged signature, so they exercise rejection paths up to signature verification rather than claim-level policy; the claim rules are covered by the contract tests in `internal/jwt`. The `-slow` flag adds a connect-then-silence test that waits for the 10-second `connectReadTimeout` to fire.
 
 ## Security notes
 
 **Handled:**
-- JWT signature verification using the issuer's public key (RS256 and ES256)
+- JWT signature verification against the issuer's published key, with ES256 pinned rather than taken from the key
 - Token expiry enforced at connect time and as a session timer
 - Issuer and audience validation
-- User account status (`act` claim)
+- User account status (`act` claim), rejected when false or absent
+- Service tokens (`typ: at+jwt`) rejected on the user path
+- An unreachable identity service reported distinctly from an invalid token, so clients back off and retry rather than treating an outage as a bad credential
 - Per-packet ACL enforcement on publish and subscribe
 - 8 KB cap on incoming WebSocket frames before allocation
 - 10-second deadline for the initial CONNECT packet
