@@ -268,7 +268,7 @@ func validClaims() map[string]any {
 	return map[string]any{
 		"iss": "https://id.swee.net",
 		"sub": "probe-user",
-		"aud": []string{"mqttproxy"},
+		"aud": []string{"mqttauth"},
 		"exp": time.Now().Add(15 * time.Minute).Unix(),
 		"iat": time.Now().Unix(),
 		"rol": "user",

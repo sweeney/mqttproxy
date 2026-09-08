@@ -18,7 +18,7 @@ import (
 
 const (
 	testIssuer   = "https://id.test.example"
-	testAudience = "mqttproxy"
+	testAudience = "mqttauth"
 )
 
 // testKeys holds a key pair and a JWK Set of the public key for use in tests.

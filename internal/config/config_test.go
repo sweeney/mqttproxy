@@ -35,7 +35,7 @@ broker:
 auth:
   well_known_url: "https://id.example.com/.well-known/oauth-authorization-server"
   issuer: "https://id.example.com"
-  audience: "mqttproxy"
+  audience: "mqttauth"
   jwks_cache_ttl: "1h"
 
 acl:
@@ -60,7 +60,7 @@ logging:
 	assert.Equal(t, 5*time.Second, cfg.Broker.DialTimeout)
 	assert.Equal(t, "https://id.example.com/.well-known/oauth-authorization-server", cfg.Auth.WellKnownURL)
 	assert.Equal(t, "https://id.example.com", cfg.Auth.Issuer)
-	assert.Equal(t, "mqttproxy", cfg.Auth.Audience)
+	assert.Equal(t, "mqttauth", cfg.Auth.Audience)
 	assert.Equal(t, time.Hour, cfg.Auth.JWKSCacheTTL)
 	assert.Equal(t, []string{"#"}, cfg.ACL.Roles["admin"].Publish)
 	assert.Equal(t, []string{"#"}, cfg.ACL.Roles["admin"].Subscribe)
@@ -201,4 +201,13 @@ auth:
 	_, err := config.Load(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "listen.path")
+}
+
+// The example config is what a new deployment starts from, so the audience in
+// it is effectively the default. It was wrong once already — a stale value here
+// is a twelve-hour outage, and config.yaml (gitignored) cannot be tested at all.
+func TestExampleConfig_AudienceIsMqttauth(t *testing.T) {
+	cfg, err := config.Load("../../config.example.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "mqttauth", cfg.Auth.Audience)
 }

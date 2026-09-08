@@ -47,7 +47,7 @@ broker:
 auth:
   well_known_url: "https://example.com/.well-known/oauth-authorization-server"
   issuer: "https://example.com"   # must match the iss claim in issued tokens
-  audience: "mqttproxy"           # must match the aud claim; omit to skip aud check
+  audience: "mqttauth"           # must match the aud claim; omit to skip aud check
   jwks_cache_ttl: "1h"            # how long to cache the JWKS before re-fetching
 
 acl:
