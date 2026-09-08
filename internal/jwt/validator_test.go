@@ -1,9 +1,17 @@
 package jwt_test
 
+// These cover the proxy's own policy and the failure modes that are not part
+// of the validation contract: role defaulting, which is mqttproxy's decision
+// rather than identity's, and malformed or forged input.
+//
+// The token-shaped fixtures live in contract_test.go.
+
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
+	"net/http"
 	"testing"
 	"time"
 
@@ -16,267 +24,125 @@ import (
 	"github.com/sweeney/mqttproxy/internal/jwt"
 )
 
-const (
-	testIssuer   = "https://id.test.example"
-	testAudience = "mqttauth"
-)
+const testAudience = "mqttauth"
 
-// testKeys holds a key pair and a JWK Set of the public key for use in tests.
-type testKeys struct {
-	priv *rsa.PrivateKey
-	set  jwk.Set
-	kid  string
-}
-
-func generateKeys(t *testing.T) testKeys {
+// newValidatorWithDefaultRole builds a validator with an explicit default
+// role, which newContractValidator fixes at "user".
+func newValidatorWithDefaultRole(t *testing.T, s *identityStub, defaultRole string) *jwt.Validator {
 	t.Helper()
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-
-	pub, err := jwk.FromRaw(priv.Public())
-	require.NoError(t, err)
-	require.NoError(t, pub.Set(jwk.KeyIDKey, "test-kid-1"))
-	require.NoError(t, pub.Set(jwk.AlgorithmKey, jwa.RS256))
-
-	set := jwk.NewSet()
-	require.NoError(t, set.AddKey(pub))
-
-	return testKeys{priv: priv, set: set, kid: "test-kid-1"}
-}
-
-// buildToken signs a JWT with the given private key and options.
-func buildToken(t *testing.T, keys testKeys, opts ...func(gojwt.Token)) []byte {
-	t.Helper()
-	tok, err := gojwt.NewBuilder().
-		Issuer(testIssuer).
-		Subject("user-uuid-123").
-		Audience([]string{testAudience}).
-		Expiration(time.Now().Add(15*time.Minute)).
-		IssuedAt(time.Now()).
-		Claim("rol", "user").
-		Build()
-	require.NoError(t, err)
-
-	for _, o := range opts {
-		o(tok)
-	}
-
-	privKey, err := jwk.FromRaw(keys.priv)
-	require.NoError(t, err)
-	require.NoError(t, privKey.Set(jwk.KeyIDKey, keys.kid))
-	require.NoError(t, privKey.Set(jwk.AlgorithmKey, jwa.RS256))
-
-	signed, err := gojwt.Sign(tok, gojwt.WithKey(jwa.RS256, privKey))
-	require.NoError(t, err)
-	return signed
-}
-
-// staticKeySource implements jwt.KeySource returning a fixed JWK set.
-type staticKeySource struct {
-	set jwk.Set
-}
-
-func (s *staticKeySource) GetKey(_ context.Context, kid string) (jwk.Key, error) {
-	k, ok := s.set.LookupKeyID(kid)
-	if !ok {
-		return nil, jwt.ErrKeyNotFound
-	}
-	return k, nil
-}
-
-func newValidator(t *testing.T, keys testKeys) *jwt.Validator {
-	t.Helper()
-	v, err := jwt.NewValidator(testIssuer, testAudience, "user", &staticKeySource{set: keys.set})
+	v, err := jwt.NewValidator(jwt.Config{
+		Issuer:      s.URL,
+		IssuerURL:   s.URL,
+		Audience:    testAudience,
+		DefaultRole: defaultRole,
+		CacheTTL:    time.Hour,
+		HTTPClient:  http.DefaultClient,
+	})
 	require.NoError(t, err)
 	return v
 }
 
-// --- Tests ---
-
-func TestValidate_ValidToken(t *testing.T) {
-	keys := generateKeys(t)
-	v := newValidator(t, keys)
-
-	token := buildToken(t, keys)
-	claims, err := v.Validate(t.Context(), string(token))
-	require.NoError(t, err)
-
-	assert.Equal(t, "user-uuid-123", claims.Subject)
-	assert.Equal(t, "user", claims.Role)
-	assert.WithinDuration(t, time.Now().Add(15*time.Minute), claims.ExpiresAt, 5*time.Second)
-}
-
 func TestValidate_AdminRole(t *testing.T) {
-	keys := generateKeys(t)
-	v := newValidator(t, keys)
+	s := newIdentityStub(t)
+	v := newContractValidator(t, s, testAudience)
 
-	token := buildToken(t, keys, func(tok gojwt.Token) {
-		tok.Set("rol", "admin")
+	raw := s.mint(t, contractKID, func(tok gojwt.Token) {
+		require.NoError(t, tok.Set("rol", "admin"))
 	})
-	claims, err := v.Validate(t.Context(), string(token))
+
+	claims, err := v.Validate(context.Background(), raw)
 	require.NoError(t, err)
 	assert.Equal(t, "admin", claims.Role)
 }
 
-func TestValidate_Expired(t *testing.T) {
-	keys := generateKeys(t)
-	v := newValidator(t, keys)
-
-	token := buildToken(t, keys, func(tok gojwt.Token) {
-		tok.Set(gojwt.ExpirationKey, time.Now().Add(-time.Minute))
-	})
-	_, err := v.Validate(t.Context(), string(token))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, jwt.ErrTokenExpired)
-}
-
-func TestValidate_InvalidSignature(t *testing.T) {
-	keys := generateKeys(t)
-	v := newValidator(t, keys)
-
-	token := buildToken(t, keys)
-	// Corrupt the signature (last 10 bytes).
-	tampered := append([]byte{}, token...)
-	for i := len(tampered) - 10; i < len(tampered); i++ {
-		tampered[i] ^= 0xFF
-	}
-
-	_, err := v.Validate(t.Context(), string(tampered))
-	require.Error(t, err)
-}
-
-func TestValidate_WrongIssuer(t *testing.T) {
-	keys := generateKeys(t)
-	v := newValidator(t, keys)
-
-	token := buildToken(t, keys, func(tok gojwt.Token) {
-		tok.Set(gojwt.IssuerKey, "https://evil.example")
-	})
-	_, err := v.Validate(t.Context(), string(token))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, jwt.ErrInvalidIssuer)
-}
-
-func TestValidate_WrongAudience(t *testing.T) {
-	keys := generateKeys(t)
-	v := newValidator(t, keys)
-
-	token := buildToken(t, keys, func(tok gojwt.Token) {
-		tok.Set(gojwt.AudienceKey, []string{"some-other-service"})
-	})
-	_, err := v.Validate(t.Context(), string(token))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, jwt.ErrInvalidAudience)
-}
-
-func TestValidate_NoAudienceCheck_WhenAudienceEmpty(t *testing.T) {
-	keys := generateKeys(t)
-	// Validator with no audience configured should not check aud.
-	v, err := jwt.NewValidator(testIssuer, "", "user", &staticKeySource{set: keys.set})
-	require.NoError(t, err)
-
-	// Token with a different audience — should still pass.
-	token := buildToken(t, keys, func(tok gojwt.Token) {
-		tok.Set(gojwt.AudienceKey, []string{"unrelated-service"})
-	})
-	_, err = v.Validate(t.Context(), string(token))
-	require.NoError(t, err)
-}
-
 func TestValidate_MissingRoleClaim_UsesDefault(t *testing.T) {
-	keys := generateKeys(t)
-	v := newValidator(t, keys) // default role = "user"
+	s := newIdentityStub(t)
+	v := newValidatorWithDefaultRole(t, s, "user")
 
-	privKey, err := jwk.FromRaw(keys.priv)
-	require.NoError(t, err)
-	require.NoError(t, privKey.Set(jwk.KeyIDKey, keys.kid))
-	require.NoError(t, privKey.Set(jwk.AlgorithmKey, jwa.RS256))
+	raw := s.mint(t, contractKID, func(tok gojwt.Token) {
+		require.NoError(t, tok.Remove("rol"))
+	})
 
-	tok, err := gojwt.NewBuilder().
-		Issuer(testIssuer).
-		Subject("user-uuid-123").
-		Audience([]string{testAudience}).
-		Expiration(time.Now().Add(15 * time.Minute)).
-		Build()
-	require.NoError(t, err)
-
-	signed, err := gojwt.Sign(tok, gojwt.WithKey(jwa.RS256, privKey))
-	require.NoError(t, err)
-
-	claims, err := v.Validate(t.Context(), string(signed))
+	claims, err := v.Validate(context.Background(), raw)
 	require.NoError(t, err)
 	assert.Equal(t, "user", claims.Role)
 }
 
 func TestValidate_MissingRoleClaim_NoDefault(t *testing.T) {
-	keys := generateKeys(t)
-	v, err := jwt.NewValidator(testIssuer, testAudience, "", &staticKeySource{set: keys.set})
-	require.NoError(t, err)
+	s := newIdentityStub(t)
+	v := newValidatorWithDefaultRole(t, s, "")
 
-	privKey, err := jwk.FromRaw(keys.priv)
-	require.NoError(t, err)
-	require.NoError(t, privKey.Set(jwk.KeyIDKey, keys.kid))
-	require.NoError(t, privKey.Set(jwk.AlgorithmKey, jwa.RS256))
+	raw := s.mint(t, contractKID, func(tok gojwt.Token) {
+		require.NoError(t, tok.Remove("rol"))
+	})
 
-	tok, err := gojwt.NewBuilder().
-		Issuer(testIssuer).
-		Subject("user-uuid-123").
-		Audience([]string{testAudience}).
-		Expiration(time.Now().Add(15 * time.Minute)).
-		Build()
-	require.NoError(t, err)
-
-	signed, err := gojwt.Sign(tok, gojwt.WithKey(jwa.RS256, privKey))
-	require.NoError(t, err)
-
-	_, err = v.Validate(t.Context(), string(signed))
+	_, err := v.Validate(context.Background(), raw)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, jwt.ErrMissingClaims)
 }
 
 func TestValidate_RolePresentOverridesDefault(t *testing.T) {
-	keys := generateKeys(t)
-	v := newValidator(t, keys) // default role = "user"
+	s := newIdentityStub(t)
+	v := newValidatorWithDefaultRole(t, s, "user")
 
-	token := buildToken(t, keys, func(tok gojwt.Token) {
-		tok.Set("rol", "admin")
+	raw := s.mint(t, contractKID, func(tok gojwt.Token) {
+		require.NoError(t, tok.Set("rol", "admin"))
 	})
-	claims, err := v.Validate(t.Context(), string(token))
+
+	claims, err := v.Validate(context.Background(), raw)
 	require.NoError(t, err)
 	assert.Equal(t, "admin", claims.Role)
 }
 
-func TestValidate_UnknownKeyID(t *testing.T) {
-	keys := generateKeys(t)
-	v := newValidator(t, keys)
+// A token with no exp cannot bound a session. It must be rejected rather than
+// read as unix zero, which would disconnect the client the moment it connected.
+func TestValidate_MissingExpiry_Rejected(t *testing.T) {
+	s := newIdentityStub(t)
+	v := newContractValidator(t, s, testAudience)
 
-	// Sign with a different key whose kid is not in the validator's key source.
-	otherKeys := generateKeys(t)
-	otherPriv, err := jwk.FromRaw(otherKeys.priv)
+	raw := s.mint(t, contractKID, func(tok gojwt.Token) {
+		require.NoError(t, tok.Remove(gojwt.ExpirationKey))
+	})
+
+	_, err := v.Validate(context.Background(), raw)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "1970")
+}
+
+func TestValidate_InvalidSignature(t *testing.T) {
+	s := newIdentityStub(t)
+	v := newContractValidator(t, s, testAudience)
+
+	// Sign with a key the stub never published, but claim the published kid.
+	other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	require.NoError(t, otherPriv.Set(jwk.KeyIDKey, "unknown-kid"))
-	require.NoError(t, otherPriv.Set(jwk.AlgorithmKey, jwa.RS256))
+	priv, err := jwk.FromRaw(other)
+	require.NoError(t, err)
+	require.NoError(t, priv.Set(jwk.KeyIDKey, contractKID))
+	require.NoError(t, priv.Set(jwk.AlgorithmKey, jwa.ES256))
 
 	tok, err := gojwt.NewBuilder().
-		Issuer(testIssuer).
-		Subject("s").
+		Issuer(s.URL).
+		Subject("user-uuid-123").
 		Audience([]string{testAudience}).
-		Expiration(time.Now().Add(time.Minute)).
+		Expiration(time.Now().Add(15*time.Minute)).
 		Claim("rol", "user").
 		Build()
 	require.NoError(t, err)
-
-	signed, err := gojwt.Sign(tok, gojwt.WithKey(jwa.RS256, otherPriv))
+	signed, err := gojwt.Sign(tok, gojwt.WithKey(jwa.ES256, priv))
 	require.NoError(t, err)
 
-	_, err = v.Validate(t.Context(), string(signed))
+	_, err = v.Validate(context.Background(), string(signed))
 	require.Error(t, err)
+	assert.ErrorIs(t, err, jwt.ErrTokenInvalid)
 }
 
 func TestValidate_Malformed(t *testing.T) {
-	keys := generateKeys(t)
-	v := newValidator(t, keys)
+	s := newIdentityStub(t)
+	v := newContractValidator(t, s, testAudience)
 
-	_, err := v.Validate(t.Context(), "this.is.not.a.jwt")
-	require.Error(t, err)
+	for _, raw := range []string{"", "not-a-jwt", "a.b.c"} {
+		_, err := v.Validate(context.Background(), raw)
+		require.Error(t, err, "expected rejection for %q", raw)
+	}
 }

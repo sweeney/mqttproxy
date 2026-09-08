@@ -7,7 +7,6 @@ broker:
   dial_timeout: "5s"
 
 auth:
-  well_known_url: "https://id.swee.net/.well-known/oauth-authorization-server"
   issuer: "https://id.swee.net"
   audience: "mqttauth"         # must match aud claim in issued tokens; omit to skip check
   jwks_cache_ttl: "1h"

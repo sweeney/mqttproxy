@@ -1,23 +1,28 @@
-// Package jwt validates MQTT client tokens against a JWKS key source.
+// Package jwt validates MQTT client tokens against the identity service's
+// JWKS, adapting identity/common/auth to the claims the proxy needs.
 package jwt
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v2/jwk"
-	"github.com/lestrrat-go/jwx/v2/jws"
-	gojwt "github.com/lestrrat-go/jwx/v2/jwt"
+	commonauth "github.com/sweeney/identity/common/auth"
 )
 
 var (
-	ErrTokenExpired    = errors.New("token is expired")
-	ErrInvalidIssuer   = errors.New("token issuer does not match")
-	ErrInvalidAudience = errors.New("token audience does not match")
-	ErrMissingClaims   = errors.New("token is missing required claims")
-	ErrKeyNotFound     = errors.New("key not found")
+	ErrTokenExpired  = errors.New("token is expired")
+	ErrTokenInvalid  = errors.New("token is invalid")
+	ErrMissingClaims = errors.New("token is missing required claims")
+
+	// ErrKeysUnavailable means the token could not be checked, not that it was
+	// bad. The distinction matters more here than in an HTTP service: a client
+	// told its token is invalid re-authenticates or gives up, whereas one told
+	// the service is unavailable should back off and retry. Without this, an
+	// identity outage looks to every device like a bad credential.
+	ErrKeysUnavailable = errors.New("signing keys unavailable")
 )
 
 // Claims holds the fields extracted from a validated JWT.
@@ -27,125 +32,92 @@ type Claims struct {
 	ExpiresAt time.Time
 }
 
-// KeySource is the interface the Validator uses to look up public keys by key
-// ID. jwks.Client satisfies this interface directly.
-type KeySource interface {
-	GetKey(ctx context.Context, kid string) (jwk.Key, error)
+// Config configures a Validator.
+type Config struct {
+	// Issuer is the expected iss claim. Required.
+	Issuer string
+	// IssuerURL is the base URL the JWKS is fetched from, as
+	// {IssuerURL}/.well-known/jwks.json. Defaults to Issuer, which is correct
+	// whenever identity is not behind a reverse proxy that rewrites its name.
+	IssuerURL string
+	// Audience, when non-empty, is asserted against the aud claim.
+	Audience string
+	// DefaultRole is used when the token carries no rol claim. Empty means rol
+	// is required. This is the proxy's own policy, not identity's.
+	DefaultRole string
+	// CacheTTL is how long fetched keys stay valid before a refetch.
+	CacheTTL time.Duration
+	// HTTPClient is used for JWKS fetches.
+	HTTPClient *http.Client
 }
 
 // Validator parses and validates JWTs, extracting the claims the proxy needs.
 type Validator struct {
-	issuer      string
-	audience    string
+	verifier    *commonauth.JWKSVerifier
 	defaultRole string
-	keySource   KeySource
 }
 
-// NewValidator creates a Validator for the given issuer, audience, and default
-// role. audience may be empty, in which case the aud claim is not validated.
-// defaultRole is used when the token carries no rol claim; an empty defaultRole
-// means rol is required.
-func NewValidator(issuer, audience, defaultRole string, keySource KeySource) (*Validator, error) {
-	if issuer == "" {
+// NewValidator creates a Validator from cfg.
+func NewValidator(cfg Config) (*Validator, error) {
+	if cfg.Issuer == "" {
 		return nil, fmt.Errorf("issuer must not be empty")
 	}
-	return &Validator{issuer: issuer, audience: audience, defaultRole: defaultRole, keySource: keySource}, nil
+	issuerURL := cfg.IssuerURL
+	if issuerURL == "" {
+		issuerURL = cfg.Issuer
+	}
+
+	verifier, err := commonauth.NewJWKSVerifier(commonauth.JWKSVerifierConfig{
+		IssuerURL:        issuerURL,
+		Issuer:           cfg.Issuer,
+		RequiredAudience: cfg.Audience,
+		CacheTTL:         cfg.CacheTTL,
+		HTTPClient:       cfg.HTTPClient,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build verifier: %w", err)
+	}
+
+	return &Validator{verifier: verifier, defaultRole: cfg.DefaultRole}, nil
 }
 
-// Validate parses the raw JWT string, verifies its signature and claims, and
-// returns the extracted Claims. Returns a sentinel error for each failure mode
-// so callers can log or respond appropriately.
+// Validate parses the raw JWT, verifies its signature and claims, and returns
+// the extracted Claims. Returns a sentinel error for each failure mode so
+// callers can log or respond appropriately.
 func (v *Validator) Validate(ctx context.Context, rawToken string) (*Claims, error) {
-	// Parse the JWS message to extract the kid from the JOSE protected header.
-	// kid lives in the header, not the payload, so ParseInsecure would not see it.
-	msg, err := jws.Parse([]byte(rawToken))
-	if err != nil {
-		return nil, fmt.Errorf("parse token: %w", err)
-	}
-	if len(msg.Signatures()) == 0 {
-		return nil, fmt.Errorf("parse token: no signatures")
-	}
-	kid := msg.Signatures()[0].ProtectedHeaders().KeyID()
-
-	key, err := v.keySource.GetKey(ctx, kid) //nolint:contextcheck
-	if err != nil {
-		return nil, fmt.Errorf("get signing key: %w", err)
-	}
-
-	// Use the algorithm declared on the key itself rather than hardcoding one,
-	// so the validator works with both ES256 (id.swee.net) and RS256.
-	parseOpts := []gojwt.ParseOption{
-		gojwt.WithKey(key.Algorithm(), key),
-		gojwt.WithValidate(true),
-		gojwt.WithIssuer(v.issuer),
-	}
-	if v.audience != "" {
-		parseOpts = append(parseOpts, gojwt.WithAudience(v.audience))
-	}
-	tok, err := gojwt.Parse([]byte(rawToken), parseOpts...)
-	if err != nil {
-		return nil, mapParseError(err)
-	}
-
-	return v.extractClaims(tok)
-}
-
-// mapParseError converts lestrrat-go/jwx errors into our sentinel types.
-func mapParseError(err error) error {
-	msg := err.Error()
+	tc, err := v.verifier.Parse(ctx, rawToken)
 	switch {
-	case contains(msg, `"exp" not satisfied`, "token is expired"):
-		return fmt.Errorf("%w: %v", ErrTokenExpired, err)
-	case contains(msg, `"iss" not satisfied`):
-		return fmt.Errorf("%w: %v", ErrInvalidIssuer, err)
-	case contains(msg, `"aud" not satisfied`):
-		return fmt.Errorf("%w: %v", ErrInvalidAudience, err)
-	default:
-		return err
+	case errors.Is(err, commonauth.ErrKeysUnavailable):
+		return nil, fmt.Errorf("%w: %v", ErrKeysUnavailable, err)
+	case errors.Is(err, commonauth.ErrTokenExpired):
+		return nil, fmt.Errorf("%w: %v", ErrTokenExpired, err)
+	case err != nil:
+		return nil, fmt.Errorf("%w: %v", ErrTokenInvalid, err)
 	}
-}
 
-func contains(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if len(s) >= len(sub) {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-const claimRole = "rol"
-
-func (v *Validator) extractClaims(tok gojwt.Token) (*Claims, error) {
-	subject := tok.Subject()
-	if subject == "" {
+	if tc.UserID == "" {
 		return nil, fmt.Errorf("%w: sub", ErrMissingClaims)
 	}
 
+	// A token with no exp cannot bound a session. The proxy holds the
+	// connection open until the token runs out, so an absent expiry would
+	// otherwise read as unix zero and disconnect the client the instant it
+	// connected — worse, silently, and only for tokens minted without one.
+	if tc.ExpiresAt == 0 {
+		return nil, fmt.Errorf("%w: exp", ErrMissingClaims)
+	}
+
 	role := v.defaultRole
-	if r, ok := stringClaim(tok, claimRole); ok && r != "" {
-		role = r
+	if tc.Role != "" {
+		role = string(tc.Role)
 	}
 	if role == "" {
 		return nil, fmt.Errorf("%w: rol (and no default_role configured)", ErrMissingClaims)
 	}
 
 	return &Claims{
-		Subject:   subject,
+		Subject:   tc.UserID,
 		Role:      role,
-		ExpiresAt: tok.Expiration(),
+		ExpiresAt: time.Unix(tc.ExpiresAt, 0),
 	}, nil
-}
-
-func stringClaim(tok gojwt.Token, key string) (string, bool) {
-	v, ok := tok.Get(key)
-	if !ok {
-		return "", false
-	}
-	s, ok := v.(string)
-	return s, ok
 }

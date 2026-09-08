@@ -29,7 +29,7 @@ The proxy terminates the session automatically when the JWT `exp` claim is reach
 
 - Go 1.22 or later
 - A running MQTT broker accessible over plain TCP (e.g. Mosquitto on port 1883)
-- An OAuth2 authorization server that publishes a JWKS at a well-known discovery URL
+- An OAuth2 authorization server that publishes a JWKS at `{issuer_url}/.well-known/jwks.json`
 
 ## Configuration
 
@@ -45,8 +45,8 @@ broker:
   dial_timeout: "5s"       # timeout for opening the TCP connection to the broker
 
 auth:
-  well_known_url: "https://example.com/.well-known/oauth-authorization-server"
   issuer: "https://example.com"   # must match the iss claim in issued tokens
+  issuer_url: "https://example.com"  # JWKS base; defaults to issuer, omit unless they differ
   audience: "mqttauth"           # must match the aud claim; omit to skip aud check
   jwks_cache_ttl: "1h"            # how long to cache the JWKS before re-fetching
 
@@ -63,7 +63,7 @@ logging:
   level: "info"   # debug | info | warn | error
 ```
 
-All fields except `audience` and `jwks_cache_ttl` are required. Duration strings use Go syntax (`5s`, `1h`, `30m`).
+All fields except `issuer_url`, `audience` and `jwks_cache_ttl` are required. Duration strings use Go syntax (`5s`, `1h`, `30m`).
 
 ## Running
 
@@ -83,7 +83,7 @@ Clients authenticate by placing a signed JWT in the MQTT `password` field. The `
 **Token validation steps:**
 
 1. Parse the JWT header to extract the `kid`.
-2. Fetch the matching public key from the JWKS (via the well-known discovery endpoint).
+2. Fetch the matching public key from the JWKS at `{issuer_url}/.well-known/jwks.json`.
 3. Verify the signature using the algorithm declared on the key (RS256 or ES256).
 4. Validate standard claims: `iss`, `aud` (if configured), `exp`.
 5. Extract and validate custom claims:
@@ -96,7 +96,7 @@ Clients authenticate by placing a signed JWT in the MQTT `password` field. The `
 
 Any failure at any step produces a CONNACK with return code `Not Authorized` (0x05 for MQTT 3.1.1, 0x87 for MQTT 5.0) and the connection is closed.
 
-**JWKS caching:** Keys are cached for `jwks_cache_ttl`. A cache miss for an unknown `kid` triggers an immediate one-time refresh to support key rotation without waiting for the TTL to expire.
+**JWKS caching:** Handled by `identity/common/auth`. Keys are cached for `jwks_cache_ttl`; a miss for an unknown `kid` triggers a refetch, throttled so a replayed bad token cannot hammer identity. Concurrent fetches are collapsed, and a cached key keeps serving a failed refetch for up to 30 minutes before the verifier reports the keys as unavailable rather than honouring them indefinitely.
 
 ## ACL
 
@@ -127,7 +127,7 @@ Returns HTTP 200 on success, 503 if the broker is unreachable.
 
 ## Testing
 
-**Unit tests** cover packet parsing, JWT validation, JWKS caching, ACL matching, and the proxy handler:
+**Unit tests** cover packet parsing, JWT validation, ACL matching, and the proxy handler:
 
 ```bash
 go test ./internal/...

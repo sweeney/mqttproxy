@@ -33,7 +33,6 @@ broker:
   dial_timeout: "5s"
 
 auth:
-  well_known_url: "https://id.example.com/.well-known/oauth-authorization-server"
   issuer: "https://id.example.com"
   audience: "mqttauth"
   jwks_cache_ttl: "1h"
@@ -58,7 +57,6 @@ logging:
 	assert.Equal(t, "/mqtt", cfg.Listen.Path)
 	assert.Equal(t, "127.0.0.1:9001", cfg.Broker.Addr)
 	assert.Equal(t, 5*time.Second, cfg.Broker.DialTimeout)
-	assert.Equal(t, "https://id.example.com/.well-known/oauth-authorization-server", cfg.Auth.WellKnownURL)
 	assert.Equal(t, "https://id.example.com", cfg.Auth.Issuer)
 	assert.Equal(t, "mqttauth", cfg.Auth.Audience)
 	assert.Equal(t, time.Hour, cfg.Auth.JWKSCacheTTL)
@@ -78,7 +76,6 @@ listen:
 broker:
   addr: "127.0.0.1:9001"
 auth:
-  well_known_url: "https://id.example.com/.well-known/oauth-authorization-server"
   issuer: "https://id.example.com"
 `)
 
@@ -105,7 +102,6 @@ listen:
 broker:
   addr: "127.0.0.1:9001"
 auth:
-  well_known_url: "https://id.example.com/.well-known/oauth-authorization-server"
   issuer: "https://id.example.com"
 `,
 		},
@@ -118,13 +114,12 @@ listen:
   path: "/mqtt"
 broker: {}
 auth:
-  well_known_url: "https://id.example.com/.well-known/oauth-authorization-server"
   issuer: "https://id.example.com"
 `,
 		},
 		{
-			name:    "missing auth well_known_url",
-			wantErr: "auth.well_known_url",
+			name:    "auth well_known_url is rejected",
+			wantErr: "auth.well_known_url is no longer supported",
 			yaml: `
 listen:
   addr: "0.0.0.0:8883"
@@ -132,6 +127,7 @@ listen:
 broker:
   addr: "127.0.0.1:9001"
 auth:
+  well_known_url: "https://id.example.com/.well-known/oauth-authorization-server"
   issuer: "https://id.example.com"
 `,
 		},
@@ -145,7 +141,6 @@ listen:
 broker:
   addr: "127.0.0.1:9001"
 auth:
-  well_known_url: "https://id.example.com/.well-known/oauth-authorization-server"
 `,
 		},
 	}
@@ -175,7 +170,6 @@ broker:
   addr: "127.0.0.1:9001"
   dial_timeout: "notaduration"
 auth:
-  well_known_url: "https://id.example.com/.well-known/oauth-authorization-server"
   issuer: "https://id.example.com"
 `)
 	_, err := config.Load(path)
@@ -195,7 +189,6 @@ listen:
 broker:
   addr: "127.0.0.1:9001"
 auth:
-  well_known_url: "https://id.example.com/.well-known/oauth-authorization-server"
   issuer: "https://id.example.com"
 `)
 	_, err := config.Load(path)

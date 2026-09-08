@@ -28,8 +28,8 @@ type BrokerConfig struct {
 }
 
 type AuthConfig struct {
-	WellKnownURL string        `yaml:"well_known_url"`
 	Issuer       string        `yaml:"issuer"`
+	IssuerURL    string        `yaml:"issuer_url"`
 	Audience     string        `yaml:"audience"`
 	JWKSCacheTTL time.Duration `yaml:"jwks_cache_ttl"`
 }
@@ -62,6 +62,7 @@ type raw struct {
 	Auth struct {
 		WellKnownURL string `yaml:"well_known_url"`
 		Issuer       string `yaml:"issuer"`
+		IssuerURL    string `yaml:"issuer_url"`
 		Audience     string `yaml:"audience"`
 		JWKSCacheTTL string `yaml:"jwks_cache_ttl"`
 	} `yaml:"auth"`
@@ -102,15 +103,23 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Broker.Addr = r.Broker.Addr
 
-	if r.Auth.WellKnownURL == "" {
-		return nil, fmt.Errorf("auth.well_known_url is required")
+	// well_known_url was removed when JWKS lookup moved to common/auth, which
+	// derives the JWKS URL from the issuer. Rejecting it loudly beats ignoring
+	// it: a config pointing discovery somewhere unexpected would otherwise keep
+	// loading while silently fetching keys from somewhere else.
+	if r.Auth.WellKnownURL != "" {
+		return nil, fmt.Errorf("auth.well_known_url is no longer supported; remove it (keys are fetched from auth.issuer_url, defaulting to auth.issuer)")
 	}
-	cfg.Auth.WellKnownURL = r.Auth.WellKnownURL
 
 	if r.Auth.Issuer == "" {
 		return nil, fmt.Errorf("auth.issuer is required")
 	}
 	cfg.Auth.Issuer = r.Auth.Issuer
+
+	cfg.Auth.IssuerURL = r.Auth.IssuerURL
+	if cfg.Auth.IssuerURL == "" {
+		cfg.Auth.IssuerURL = r.Auth.Issuer
+	}
 	cfg.Auth.Audience = r.Auth.Audience // optional; empty means no aud check
 
 	// Durations with defaults.

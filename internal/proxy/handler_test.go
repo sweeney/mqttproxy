@@ -179,7 +179,7 @@ func TestHandler_InvalidToken_ConnackNotAuthorized(t *testing.T) {
 
 func TestHandler_WrongIssuer_ConnackNotAuthorized(t *testing.T) {
 	h := proxy.NewHandler(proxy.Config{
-		Validator: &fakeValidator{err: jwt.ErrInvalidIssuer},
+		Validator: &fakeValidator{err: jwt.ErrTokenInvalid},
 		ACL:       &fakeACL{},
 		Dialer:    &fakeBrokerDialer{err: errors.New("should not be called")},
 	})

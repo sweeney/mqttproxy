@@ -16,7 +16,6 @@ import (
 
 	"github.com/sweeney/mqttproxy/internal/acl"
 	"github.com/sweeney/mqttproxy/internal/config"
-	"github.com/sweeney/mqttproxy/internal/jwks"
 	"github.com/sweeney/mqttproxy/internal/jwt"
 	"github.com/sweeney/mqttproxy/internal/proxy"
 )
@@ -51,17 +50,14 @@ func run() error {
 		zap.String("broker", cfg.Broker.Addr),
 	)
 
-	jwksClient, err := jwks.NewClient(
-		cfg.Auth.WellKnownURL,
-		cfg.Auth.JWKSCacheTTL,
-		&http.Client{Timeout: 10 * time.Second},
-	)
-	if err != nil {
-		return fmt.Errorf("init JWKS client: %w", err)
-	}
-
-	// jwks.Client satisfies jwt.KeySource directly.
-	validator, err := jwt.NewValidator(cfg.Auth.Issuer, cfg.Auth.Audience, cfg.ACL.DefaultRole, jwksClient)
+	validator, err := jwt.NewValidator(jwt.Config{
+		Issuer:      cfg.Auth.Issuer,
+		IssuerURL:   cfg.Auth.IssuerURL,
+		Audience:    cfg.Auth.Audience,
+		DefaultRole: cfg.ACL.DefaultRole,
+		CacheTTL:    cfg.Auth.JWKSCacheTTL,
+		HTTPClient:  &http.Client{Timeout: 10 * time.Second},
+	})
 	if err != nil {
 		return fmt.Errorf("init JWT validator: %w", err)
 	}

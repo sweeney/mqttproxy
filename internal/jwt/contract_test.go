@@ -8,7 +8,7 @@ package jwt_test
 //   - ES256, because common/auth is ECDSA-only (it pins the algorithm rather
 //     than trusting the one the JWKS key declares).
 //   - a real JWKS endpoint over HTTP, not an injected KeySource, because that
-//     interface does not survive the swap.
+//     interface did not survive the swap.
 //   - rejection asserted as "an error", not as a particular sentinel, except
 //     for expiry — which stays distinguishable on both sides because callers
 //     act on it.
@@ -22,7 +22,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -34,16 +33,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/sweeney/mqttproxy/internal/jwks"
 	"github.com/sweeney/mqttproxy/internal/jwt"
 )
 
 const contractKID = "contract-kid-1"
 
-// identityStub serves the two endpoints an identity service exposes: the
-// well-known discovery document and the JWKS itself. Serving both means the
-// same stub works for discovery-based lookup today and for the verifier's
-// {IssuerURL}/.well-known/jwks.json convention afterwards.
+// identityStub serves the JWKS the way identity does, at
+// {IssuerURL}/.well-known/jwks.json.
 type identityStub struct {
 	*httptest.Server
 	priv *ecdsa.PrivateKey
@@ -71,10 +67,6 @@ func newIdentityStub(t *testing.T) *identityStub {
 	mux.HandleFunc("/.well-known/jwks.json", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(jwksJSON)
-	})
-	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"issuer":%q,"jwks_uri":"%s/.well-known/jwks.json"}`, stub.URL, stub.URL)
 	})
 	stub.Server = httptest.NewServer(mux)
 	t.Cleanup(stub.Close)
@@ -118,10 +110,14 @@ func (s *identityStub) mint(t *testing.T, kid string, opts ...func(gojwt.Token))
 func newContractValidator(t *testing.T, s *identityStub, audience string) *jwt.Validator {
 	t.Helper()
 
-	client, err := jwks.NewClient(s.URL+"/.well-known/oauth-authorization-server", time.Hour, http.DefaultClient)
-	require.NoError(t, err)
-
-	v, err := jwt.NewValidator(s.URL, audience, "user", client)
+	v, err := jwt.NewValidator(jwt.Config{
+		Issuer:      s.URL,
+		IssuerURL:   s.URL,
+		Audience:    audience,
+		DefaultRole: "user",
+		CacheTTL:    time.Hour,
+		HTTPClient:  http.DefaultClient,
+	})
 	require.NoError(t, err)
 	return v
 }
@@ -206,4 +202,22 @@ func TestContract_NoAudienceConfigured_SkipsAudCheck(t *testing.T) {
 
 	_, err := v.Validate(context.Background(), raw)
 	require.NoError(t, err)
+}
+
+// An identity outage must not look like a bad credential. A client told its
+// token is invalid re-authenticates or gives up; one told the service is
+// unavailable should back off and retry. The old validator could not tell
+// these apart, so every device saw an outage as its own credential failing.
+func TestContract_IdentityUnreachable_IsNotInvalidToken(t *testing.T) {
+	s := newIdentityStub(t)
+	raw := s.mint(t, contractKID)
+
+	// Build the validator against the stub, then take identity away.
+	v := newContractValidator(t, s, testAudience)
+	s.Close()
+
+	_, err := v.Validate(context.Background(), raw)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, jwt.ErrKeysUnavailable)
+	assert.NotErrorIs(t, err, jwt.ErrTokenInvalid)
 }
