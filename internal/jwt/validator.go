@@ -23,6 +23,11 @@ var (
 	// the service is unavailable should back off and retry. Without this, an
 	// identity outage looks to every device like a bad credential.
 	ErrKeysUnavailable = errors.New("signing keys unavailable")
+
+	// ErrAccountDisabled means the token was minted for an account that was
+	// already inactive. Distinct from an invalid token because retrying will
+	// not help: the credential is well-formed, the account is off.
+	ErrAccountDisabled = errors.New("account is disabled")
 )
 
 // Claims holds the fields extracted from a validated JWT.
@@ -105,6 +110,13 @@ func (v *Validator) Validate(ctx context.Context, rawToken string) (*Claims, err
 	// connected — worse, silently, and only for tokens minted without one.
 	if tc.ExpiresAt == 0 {
 		return nil, fmt.Errorf("%w: exp", ErrMissingClaims)
+	}
+
+	// act is a mint-time snapshot — identity re-reads the database, the proxy
+	// cannot — so this catches accounts disabled before the token was issued,
+	// not after. Free, and strictly better than ignoring the claim.
+	if !tc.IsActive {
+		return nil, fmt.Errorf("%w: %s", ErrAccountDisabled, tc.UserID)
 	}
 
 	role := v.defaultRole

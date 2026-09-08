@@ -29,6 +29,7 @@ import (
 
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v2/jws"
 	gojwt "github.com/lestrrat-go/jwx/v2/jwt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -220,4 +221,65 @@ func TestContract_IdentityUnreachable_IsNotInvalidToken(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, jwt.ErrKeysUnavailable)
 	assert.NotErrorIs(t, err, jwt.ErrTokenInvalid)
+}
+
+// mintTyped signs a token carrying an explicit typ JOSE header.
+func (s *identityStub) mintTyped(t *testing.T, typ string, opts ...func(gojwt.Token)) string {
+	t.Helper()
+
+	tok, err := gojwt.NewBuilder().
+		Issuer(s.URL).
+		Subject("client-uuid-456").
+		Audience([]string{testAudience}).
+		Expiration(time.Now().Add(15*time.Minute)).
+		IssuedAt(time.Now()).
+		Claim("client_id", "some-service").
+		Claim("rol", "admin").
+		Build()
+	require.NoError(t, err)
+
+	for _, o := range opts {
+		o(tok)
+	}
+
+	priv, err := jwk.FromRaw(s.priv)
+	require.NoError(t, err)
+	require.NoError(t, priv.Set(jwk.KeyIDKey, contractKID))
+	require.NoError(t, priv.Set(jwk.AlgorithmKey, jwa.ES256))
+
+	hdrs := jws.NewHeaders()
+	require.NoError(t, hdrs.Set(jws.TypeKey, typ))
+
+	signed, err := gojwt.Sign(tok, gojwt.WithKey(jwa.ES256, priv, jws.WithProtectedHeaders(hdrs)))
+	require.NoError(t, err)
+	return string(signed)
+}
+
+// A client_credentials machine token must not pass as a user identity. The
+// two carry different subjects — a client id, not a user — so accepting one
+// here would let a service act as whatever user its sub happened to name.
+func TestContract_ServiceToken_Rejected(t *testing.T) {
+	s := newIdentityStub(t)
+	v := newContractValidator(t, s, testAudience)
+
+	raw := s.mintTyped(t, "at+jwt")
+
+	_, err := v.Validate(context.Background(), raw)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, jwt.ErrTokenInvalid)
+}
+
+// act is a mint-time snapshot: identity re-reads the database, the proxy
+// cannot. So this catches accounts disabled before the token was issued, not
+// after — free, and strictly better than ignoring the claim.
+func TestContract_InactiveUser_Rejected(t *testing.T) {
+	s := newIdentityStub(t)
+	v := newContractValidator(t, s, testAudience)
+
+	raw := s.mint(t, contractKID, func(tok gojwt.Token) {
+		require.NoError(t, tok.Set("act", false))
+	})
+
+	_, err := v.Validate(context.Background(), raw)
+	require.Error(t, err)
 }
