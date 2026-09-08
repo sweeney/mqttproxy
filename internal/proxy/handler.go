@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -87,6 +88,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
+	out := &wsWriter{conn: wsConn}
+
 	// Read the first MQTT packet — must be CONNECT.
 	wsConn.SetReadDeadline(time.Now().Add(connectReadTimeout))
 	msgType, pktBytes, err := wsConn.ReadMessage()
@@ -123,7 +126,7 @@ func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) 
 			zap.String("client_id", connectPkt.ClientID),
 			zap.Error(err),
 		)
-		writeWS(wsConn, mqtt.WriteConnack(version, mqtt.ConnackNotAuthorized, false))
+		out.write(mqtt.WriteConnack(version, mqtt.ConnackNotAuthorized, false))
 		wsConn.Close()
 		return
 	}
@@ -132,7 +135,7 @@ func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) 
 	brokerConn, err := h.dialer.Dial(ctx)
 	if err != nil {
 		h.log.Error("broker dial failed", zap.Error(err))
-		writeWS(wsConn, mqtt.WriteConnack(version, mqtt.ConnackServerUnavailable, false))
+		out.write(mqtt.WriteConnack(version, mqtt.ConnackServerUnavailable, false))
 		wsConn.Close()
 		return
 	}
@@ -143,7 +146,7 @@ func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) 
 	rewrittenConnect := connectPkt.WithUsername(claims.Subject)
 	if err := writeBroker(brokerConn, rewrittenConnect); err != nil {
 		h.log.Error("write CONNECT to broker failed", zap.Error(err))
-		writeWS(wsConn, mqtt.WriteConnack(version, mqtt.ConnackServerUnavailable, false))
+		out.write(mqtt.WriteConnack(version, mqtt.ConnackServerUnavailable, false))
 		return
 	}
 
@@ -152,18 +155,18 @@ func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) 
 	n, err := brokerConn.Read(connackBuf)
 	if err != nil || n < 4 {
 		h.log.Error("read CONNACK from broker failed", zap.Error(err))
-		writeWS(wsConn, mqtt.WriteConnack(version, mqtt.ConnackServerUnavailable, false))
+		out.write(mqtt.WriteConnack(version, mqtt.ConnackServerUnavailable, false))
 		return
 	}
 	connack := connackBuf[:n]
 
 	// If the broker rejected the connection, forward its CONNACK and stop.
 	if mqtt.ReadPacketType(connack[0]) == mqtt.TypeConnack && connack[3] != 0x00 {
-		writeWS(wsConn, connack)
+		out.write(connack)
 		return
 	}
 
-	if err := writeWS(wsConn, connack); err != nil {
+	if err := out.write(connack); err != nil {
 		return
 	}
 
@@ -183,7 +186,7 @@ func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) 
 	// broker → client: raw byte copy, no inspection needed.
 	go func() {
 		defer close(done)
-		err := copyBrokerToClient(wsConn, brokerConn.(net.Conn))
+		err := copyBrokerToClient(out, brokerConn.(net.Conn))
 		h.log.Debug("broker→client copy ended",
 			zap.String("username", claims.Subject),
 			zap.Error(err),
@@ -191,7 +194,7 @@ func (h *Handler) handleConnection(ctx context.Context, wsConn *websocket.Conn) 
 	}()
 
 	// client → broker: inspect MQTT packets for ACL enforcement.
-	h.proxyClientToBroker(ctx, wsConn, brokerConn.(net.Conn), claims, version, expiryTimer.C, done)
+	h.proxyClientToBroker(ctx, out, brokerConn.(net.Conn), claims, version, expiryTimer.C, done)
 
 	h.log.Info("session ended",
 		zap.String("username", claims.Subject),
@@ -209,7 +212,7 @@ type wsMessage struct {
 // ACL checks, and forwards permitted frames to the broker.
 func (h *Handler) proxyClientToBroker(
 	ctx context.Context,
-	wsConn *websocket.Conn,
+	out *wsWriter,
 	brokerConn net.Conn,
 	claims *jwt.Claims,
 	version mqtt.ProtocolVersion,
@@ -219,7 +222,8 @@ func (h *Handler) proxyClientToBroker(
 	msgs := make(chan wsMessage, 1)
 
 	readNext := func() {
-		msgType, frame, err := wsConn.ReadMessage()
+		// Only this goroutine reads, so the read side needs no lock.
+		msgType, frame, err := out.conn.ReadMessage()
 		msgs <- wsMessage{msgType, frame, err}
 	}
 	go readNext()
@@ -230,8 +234,8 @@ func (h *Handler) proxyClientToBroker(
 			h.log.Info("token expired, disconnecting",
 				zap.String("username", claims.Subject),
 			)
-			writeWS(wsConn, mqtt.WriteDisconnect(version, mqtt.DisconnectSessionTakenOver))
-			wsConn.Close()
+			out.write(mqtt.WriteDisconnect(version, mqtt.DisconnectSessionTakenOver))
+			out.close()
 			brokerConn.Close()
 			return
 
@@ -262,7 +266,7 @@ func (h *Handler) proxyClientToBroker(
 				continue
 			}
 
-			if !h.checkACL(wsConn, brokerConn, claims, version, m.frame) {
+			if !h.checkACL(out, brokerConn, claims, version, m.frame) {
 				return
 			}
 
@@ -278,7 +282,7 @@ func (h *Handler) proxyClientToBroker(
 // checkACL inspects a client→broker MQTT frame and enforces ACL policy.
 // Returns false if the connection should be terminated.
 func (h *Handler) checkACL(
-	wsConn *websocket.Conn,
+	out *wsWriter,
 	brokerConn net.Conn,
 	claims *jwt.Claims,
 	version mqtt.ProtocolVersion,
@@ -302,17 +306,17 @@ func (h *Handler) checkACL(
 			qos := (frame[0] >> 1) & 0x03
 			switch {
 			case version == mqtt.ProtocolV50 && qos == 1:
-				writeWS(wsConn, mqtt.WritePuback(version, packetID, mqtt.PubackNotAuthorized))
+				out.write(mqtt.WritePuback(version, packetID, mqtt.PubackNotAuthorized))
 				return true // session continues; only this message rejected
 
 			case version == mqtt.ProtocolV50 && qos >= 2:
-				writeWS(wsConn, mqtt.WritePuback(version, packetID, mqtt.PubackNotAuthorized))
+				out.write(mqtt.WritePuback(version, packetID, mqtt.PubackNotAuthorized))
 				return true
 
 			default:
 				// MQTT 3.1.1 or QoS 0: no per-message rejection — disconnect.
-				writeWS(wsConn, mqtt.WriteDisconnect(version, mqtt.DisconnectNotAuthorized))
-				wsConn.Close()
+				out.write(mqtt.WriteDisconnect(version, mqtt.DisconnectNotAuthorized))
+				out.close()
 				brokerConn.Close()
 				return false
 			}
@@ -343,13 +347,13 @@ func (h *Handler) checkACL(
 		// If every requested subscription is denied, send a SUBACK with all
 		// failure codes and do not forward to the broker.
 		if allDenied {
-			writeWS(wsConn, mqtt.WriteSuback(version, packetID, codes))
+			out.write(mqtt.WriteSuback(version, packetID, codes))
 			return true
 		}
 
 		// Mixed: let the broker handle it but override codes for denied topics.
 		// For simplicity we block the entire SUBSCRIBE and respond ourselves.
-		writeWS(wsConn, mqtt.WriteSuback(version, packetID, codes))
+		out.write(mqtt.WriteSuback(version, packetID, codes))
 		return true
 	}
 
@@ -359,23 +363,42 @@ func (h *Handler) checkACL(
 // copyBrokerToClient copies raw bytes from the broker TCP connection to the
 // WebSocket client. Each MQTT packet is read as a complete frame and sent as
 // a binary WebSocket message.
-func copyBrokerToClient(wsConn *websocket.Conn, brokerConn net.Conn) error {
+func copyBrokerToClient(out *wsWriter, brokerConn net.Conn) error {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := brokerConn.Read(buf)
 		if err != nil {
 			return fmt.Errorf("broker read: %w", err)
 		}
-		wsConn.SetWriteDeadline(time.Now().Add(writeTimeout))
-		if err := wsConn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
+		if err := out.write(buf[:n]); err != nil {
 			return fmt.Errorf("ws write: %w", err)
 		}
 	}
 }
 
-func writeWS(conn *websocket.Conn, data []byte) error {
-	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	return conn.WriteMessage(websocket.BinaryMessage, data)
+// wsWriter serialises writes to the client WebSocket connection. gorilla
+// supports only one concurrent writer, and two goroutines write for the whole
+// life of a session: the broker→client pump, and the client→broker loop
+// answering with PUBACK, SUBACK or DISCONNECT. Without this lock, broker
+// traffic arriving as the loop writes back panics the process — taking every
+// other session on the proxy down with it.
+type wsWriter struct {
+	mu   sync.Mutex
+	conn *websocket.Conn
+}
+
+func (w *wsWriter) write(data []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	return w.conn.WriteMessage(websocket.BinaryMessage, data)
+}
+
+// close is safe to call while a write is in flight: gorilla documents Close as
+// callable concurrently with all other methods, and it is what unblocks a
+// writer stuck on a dead peer.
+func (w *wsWriter) close() error {
+	return w.conn.Close()
 }
 
 func writeBroker(conn net.Conn, data []byte) error {

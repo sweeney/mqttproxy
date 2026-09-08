@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -517,4 +518,68 @@ func writeBytes(buf *bytes.Buffer, b []byte) {
 	buf.WriteByte(byte(len(b) >> 8))
 	buf.WriteByte(byte(len(b)))
 	buf.Write(b)
+}
+
+// The broker→client pump and the client→broker loop both write to the same
+// WebSocket connection, and gorilla/websocket permits only one concurrent
+// writer. Any broker traffic arriving while the loop writes back — a token
+// expiry DISCONNECT, an ACL PUBACK/SUBACK — panics the whole process, taking
+// every other session with it.
+//
+// Runs several sessions in parallel to widen the window; the race detector
+// flags the overlapping writes even when the panic itself does not fire.
+func TestHandler_BrokerTrafficDuringExpiry_NoConcurrentWrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timing-sensitive test in short mode")
+	}
+
+	for i := 0; i < 12; i++ {
+		t.Run(fmt.Sprintf("session-%d", i), func(t *testing.T) {
+			t.Parallel()
+
+			dialer, brokerConn := pipeDialer(t)
+
+			h := proxy.NewHandler(proxy.Config{
+				Validator: &fakeValidator{
+					claims: &jwt.Claims{
+						Subject:   "alice",
+						Role:      "admin",
+						ExpiresAt: time.Now().Add(120 * time.Millisecond),
+					},
+				},
+				ACL:    &fakeACL{allowPublish: true, allowSubscribe: true},
+				Dialer: dialer,
+			})
+
+			srv, d := startProxy(t, h)
+			wsConn := connectMQTT(t, d, wsURL(srv), "expiring-jwt")
+
+			go brokerHandleConnect(t, brokerConn, mqtt.ProtocolV311)
+
+			// CONNACK arriving means brokerHandleConnect is done with the pipe.
+			msg := readMQTTMessage(t, wsConn)
+			require.Equal(t, mqtt.TypeConnack, mqtt.ReadPacketType(msg[0]))
+
+			// Drain continuously so the pump keeps writing rather than blocking.
+			go func() {
+				for {
+					wsConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+					if _, _, err := wsConn.ReadMessage(); err != nil {
+						return
+					}
+				}
+			}()
+
+			// Flood across the expiry instant, so the pump's writes overlap the
+			// DISCONNECT written by the expiry case of proxyClientToBroker.
+			payload := make([]byte, 256)
+			deadline := time.Now().Add(700 * time.Millisecond)
+			for time.Now().Before(deadline) {
+				brokerConn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+				if _, err := brokerConn.Write(payload); err != nil {
+					break
+				}
+			}
+		})
+	}
 }
