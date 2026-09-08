@@ -81,10 +81,11 @@ broker:
   dial_timeout: "5s"
 
 auth:
-  well_known_url: "${E2E_AUTH_URL}/.well-known/oauth-authorization-server"
   issuer: "${E2E_AUTH_URL}"
+  # issuer_url omitted: it defaults to issuer, and keys are fetched from
+  # ${E2E_AUTH_URL}/.well-known/jwks.json.
   # audience omitted: e2e tokens come from /auth/login which does not set aud.
-  # Production tokens from the OAuth flow will include aud: mqttproxy.
+  # Production tokens from the OAuth flow will include aud: mqttauth.
   jwks_cache_ttl: "1h"
 
 acl:
