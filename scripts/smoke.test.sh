@@ -21,6 +21,9 @@ GOOD_TOKEN="e30.${payload}.sig"
 #   FAKE_ACCEPT_BAD=1  the "broker" accepts malformed or missing passwords
 #   FAKE_PUB_LEAKS=1   the "proxy" lets a user publish through
 #   FAKE_NO_MSGS=1     a valid subscription receives nothing
+#   FAKE_FEW_MSGS=1    a valid subscription receives 2 messages, then times out
+#   FAKE_ACCEPT_QUIET=1  bad passwords are accepted, but nothing arrives (rc 27)
+#   FAKE_WATCH_DOWN=1  the publish watcher cannot connect (rc 1)
 #   FAKE_STATE         directory shared by the stubs
 cat >"$STUBS/mosquitto_sub" <<'EOF'
 #!/usr/bin/env bash
@@ -34,15 +37,18 @@ while [ $# -gt 0 ]; do
 done
 if [ -z "$pw" ] || [ "$pw" = "not.a.jwt" ]; then
     [ "${FAKE_ACCEPT_BAD:-0}" = 1 ] && { echo "x/y hello"; exit 0; }
+    [ "${FAKE_ACCEPT_QUIET:-0}" = 1 ] && { echo "Timed out" >&2; exit 27; }
     echo "Connection error: Connection Refused: not authorised" >&2; exit 5
 fi
 case "$topic" in
     smoke/*)
+        [ "${FAKE_WATCH_DOWN:-0}" = 1 ] && { echo "Connection error: Connection refused" >&2; exit 1; }
         sleep 0.5
         if [ -f "$FAKE_STATE/published" ]; then echo smoke; exit 0; fi
         echo "Timed out" >&2; exit 27 ;;
 esac
 [ "${FAKE_NO_MSGS:-0}" = 1 ] && { echo "Timed out" >&2; exit 27; }
+[ "${FAKE_FEW_MSGS:-0}" = 1 ] && { echo 'a/1 {"v":1}'; echo 'a/2 {"v":1}'; echo "Timed out" >&2; exit 27; }
 for t in a/1 a/2 b/1 b/2 c/1; do echo "$t {\"v\":1}"; done
 EOF
 cat >"$STUBS/mosquitto_pub" <<'EOF'
@@ -83,6 +89,10 @@ run "reports the topics it received" 0 'topics: a/1 a/2 b/1 b/2 c/1'
 run "--no-publish skips the publish check" 0 'result: 3 passed, 0 failed' -- --no-publish
 run "no messages on a valid subscription fails" 1 'FAIL  rc=27' FAKE_NO_MSGS=1
 run "accepting a malformed token fails" 1 'malformed token was accepted' FAKE_ACCEPT_BAD=1
+run "a quiet filter with a few messages passes" 0 'received 2 message' FAKE_FEW_MSGS=1 -- --no-publish
+run "a bad token accepted on a quiet filter fails" 1 'malformed token was accepted' FAKE_ACCEPT_QUIET=1 -- --no-publish
+run "a missing password accepted on a quiet filter fails" 1 'without a password was accepted' FAKE_ACCEPT_QUIET=1 -- --no-publish
+run "a publish check whose watcher never connected is inconclusive" 1 'inconclusive' FAKE_WATCH_DOWN=1
 run "a leaked user publish fails" 1 'publish reached the broker' FAKE_PUB_LEAKS=1
 run "a non-JWT token is a precondition failure" 2 'not a JWT with a usr claim' MQTT_TOKEN=garbage
 run "no token source is a precondition failure" 2 'no MQTT_TOKEN and no auth.py' MQTT_TOKEN= SWEENET_AUTH=/nonexistent

@@ -59,7 +59,8 @@ print(json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))["usr"])
 ' 2>/dev/null) || die "token is not a JWT with a usr claim"
 
 WATCH=$(mktemp)
-trap 'rm -f "$WATCH"' EXIT
+SUBERR=$(mktemp)
+trap 'rm -f "$WATCH" "$SUBERR"' EXIT
 CONN=(--ws -h "$HOST" -p 443 --tls-use-os-certs -V mqttv311)
 pass=0 fail=0
 ok()  { echo "  PASS  $*"; pass=$((pass+1)); }
@@ -69,22 +70,31 @@ echo "== health"
 curl -s -m 10 "https://$HOST/health" || echo "(no response)"
 echo
 
+# mosquitto_sub -W exits 0 when -C messages arrived, 27 when it was connected
+# but timed out first, and anything else when it never got a working
+# connection. So 0 and 27 both mean the broker accepted the client.
+accepted() { [ "$1" -eq 0 ] || [ "$1" -eq 27 ]; }
+
 echo "== 1. valid token: subscribe '$FILTER', expect messages"
-out=$(mosquitto_sub "${CONN[@]}" -i "smoke-$$-sub" -u "$USR" -P "$TOKEN" -t "$FILTER" -v -C 5 -W 20 2>&1) && rc=0 || rc=$?
+# Messages from stdout only: mosquitto_sub's own errors ("Timed out") go to
+# stderr and must not count as messages.
+out=$(mosquitto_sub "${CONN[@]}" -i "smoke-$$-sub" -u "$USR" -P "$TOKEN" -t "$FILTER" -v -C 5 -W 20 2>"$SUBERR") && rc=0 || rc=$?
 n=$(printf '%s\n' "$out" | grep -c ' ' || true)
-if [ "$rc" -eq 0 ] && [ "$n" -ge 1 ]; then
+# A quiet filter may time out (27) after fewer than -C messages; any message
+# at all proves the subscription works.
+if accepted "$rc" && [ "$n" -ge 1 ]; then
     ok "received $n message(s); topics: $(printf '%s\n' "$out" | awk '{print $1}' | sort -u | head -5 | tr '\n' ' ')"
 else
-    bad "rc=$rc: $(printf '%s' "$out" | head -3)"
+    bad "rc=$rc: $(cat "$SUBERR" - <<<"$out" | head -3)"
 fi
 
 echo "== 2. malformed token: expect connection refused"
 out=$(mosquitto_sub "${CONN[@]}" -i "smoke-$$-bad" -u "$USR" -P not.a.jwt -t "$FILTER" -C 1 -W 10 2>&1) && rc=0 || rc=$?
-if [ "$rc" -ne 0 ]; then ok "refused (rc=$rc): $(printf '%s' "$out" | head -1)"; else bad "malformed token was accepted"; fi
+if ! accepted "$rc"; then ok "refused (rc=$rc): $(printf '%s' "$out" | head -1)"; else bad "malformed token was accepted (rc=$rc)"; fi
 
 echo "== 3. no password: expect connection refused"
 out=$(mosquitto_sub "${CONN[@]}" -i "smoke-$$-nopw" -u "$USR" -t "$FILTER" -C 1 -W 10 2>&1) && rc=0 || rc=$?
-if [ "$rc" -ne 0 ]; then ok "refused (rc=$rc): $(printf '%s' "$out" | head -1)"; else bad "client without a password was accepted"; fi
+if ! accepted "$rc"; then ok "refused (rc=$rc): $(printf '%s' "$out" | head -1)"; else bad "client without a password was accepted (rc=$rc)"; fi
 
 if [ "$PUBLISH" -eq 1 ]; then
     echo "== 4. user-role publish: expect it denied"
@@ -95,11 +105,15 @@ if [ "$PUBLISH" -eq 1 ]; then
     wpid=$!
     sleep "${SMOKE_SETTLE:-2}"   # let the watcher subscribe first
     mosquitto_pub "${CONN[@]}" -i "smoke-$$-pub" -u "$USR" -P "$TOKEN" -t "$topic" -m smoke -q 1 >/dev/null 2>&1 && prc=0 || prc=$?
-    wait "$wpid" || true
-    if ! grep -qx smoke "$WATCH"; then
+    wait "$wpid" && wrc=0 || wrc=$?
+    # Only a watcher that was connected and timed out (27) proves the publish
+    # never arrived. One that never connected saw nothing either way.
+    if grep -qx smoke "$WATCH"; then
+        bad "publish reached the broker on $topic"
+    elif [ "$wrc" -eq 27 ]; then
         ok "publish did not reach the broker (pub rc=$prc)"
     else
-        bad "publish reached the broker on $topic"
+        bad "inconclusive: the watcher did not stay connected (rc=$wrc): $(head -1 "$WATCH")"
     fi
 else
     echo "== 4. skipped (--no-publish)"
