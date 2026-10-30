@@ -146,6 +146,12 @@ Optional overrides: `E2E_BROKER_ADDR`, `E2E_PROXY_ADDR`, `E2E_PROXY_PORT`, `E2E_
 
 The e2e suite covers: admin publish/subscribe, user subscribe-only, user publish causing disconnect, invalid token rejection, and missing token rejection.
 
+**Deploy smoke test** checks a running deployment the way a real client sees it: over `wss://`, with a real user token from the swee.net auth skill (or `MQTT_TOKEN`). It confirms that a valid token receives messages, that a malformed token or a missing password is refused, and that a `user`-role publish is denied. Run it before a deploy for a baseline, and again after. `--no-publish` makes it read-only. `scripts/smoke.test.sh` tests the script against stubs.
+
+```bash
+./scripts/smoke.sh [--host mqtt.swee.net] [--filter '#'] [--no-publish]
+```
+
 **probeauth** is a manual adversarial probe tool that fires a battery of bad inputs at a running proxy to verify rejection behaviour:
 
 ```bash
